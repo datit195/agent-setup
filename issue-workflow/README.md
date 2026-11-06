@@ -1,10 +1,3 @@
----
-title: Issue workflow automation
-description: Per-repo templates that close linked issues and add a done label when work is merged into the default branch
-updated: 2026-11-06
-status: active
----
-
 # Issue workflow automation
 
 ## What it does
