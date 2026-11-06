@@ -1,0 +1,6 @@
+{
+  "servers": {
+    "codegraph": {"command": "codegraph", "args": ["serve", "--mcp"], "env": {}},
+    "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@0.0.83"], "env": {}}
+  }
+}

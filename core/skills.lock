@@ -1,0 +1,15 @@
+# Third-party skills pinned to the installed commit. One per line, tab-separated: name, github owner/repo, full commit sha, path in repo.
+anatomy	wheresryan22/anatomy	1482e8469b0a9e0d8cc18ea2740a01423d29ae80	.
+threejs-animation	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-animation
+threejs-asset-pipeline	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-asset-pipeline
+threejs-fundamentals	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-fundamentals
+threejs-geometry	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-geometry
+threejs-interaction	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-interaction
+threejs-lighting	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-lighting
+threejs-loaders	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-loaders
+threejs-materials	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-materials
+threejs-performance	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-performance
+threejs-postprocessing	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-postprocessing
+threejs-react-three-fiber	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-react-three-fiber
+threejs-shaders	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-shaders
+threejs-textures	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-textures

@@ -1,0 +1,41 @@
+# Include from .gitlab-ci.yml or paste into it.
+# When a merge lands on the default branch, close the linked issues and add the "done" label.
+# Requires a masked CI/CD variable ISSUE_BOT_TOKEN (project access token, api scope, Reporter role or higher).
+issue-done:
+  stage: .post
+  image: alpine:3.20
+  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "push" && $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+  script:
+    - |
+      if [ -z "$ISSUE_BOT_TOKEN" ]; then
+        echo "ISSUE_BOT_TOKEN is not set: add a masked CI/CD variable with a project access token (api scope, Reporter+). Skipping."
+        exit 0
+      fi
+      apk add --no-cache curl jq >/dev/null
+      api="$CI_API_V4_URL/projects/$CI_PROJECT_ID"
+      if ! mrs=$(curl -fsS --header "PRIVATE-TOKEN: $ISSUE_BOT_TOKEN" "$api/repository/commits/$CI_COMMIT_SHA/merge_requests"); then
+        echo "WARNING: could not list merge requests for $CI_COMMIT_SHA"
+        exit 0
+      fi
+      BODY=$(printf '%s' "$mrs" | jq -r '.[] | select(.state == "merged") | .description // ""')
+      BRANCH=$(printf '%s' "$mrs" | jq -r '.[] | select(.state == "merged") | .source_branch')
+      # --- extract-issues begin ---
+      issues=$(
+        {
+          printf '%s\n' "$BODY" | grep -oiE '(^|[^[:alnum:]_/])(close[sd]?|fix(e[sd])?|resolve[sd]?):?[[:space:]]*#[0-9]+' | grep -oE '#[0-9]+$' | tr -d '#' || true
+          printf '%s\n' "$BRANCH" | sed -nE 's#^[a-z]+/([0-9]+)-.*#\1#p'
+        } | sort -nu
+      )
+      # --- extract-issues end ---
+      if [ -z "$issues" ]; then
+        echo "No linked issues found in merged MR descriptions or branch names"
+        exit 0
+      fi
+      for n in $issues; do
+        echo "Issue #$n"
+        curl -fsS -o /dev/null -X PUT --header "PRIVATE-TOKEN: $ISSUE_BOT_TOKEN" \
+          --data "add_labels=done&state_event=close" "$api/issues/$n" \
+          || echo "WARNING: could not label/close issue #$n"
+      done

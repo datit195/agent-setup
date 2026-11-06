@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "defaultMode": "auto",
+    "allow": [
+      "mcp__codegraph__*"
+    ]
+  },
+  "theme": "dark",
+  "skipDangerousModePermissionPrompt": true,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__HOME__/.claude/hooks/issue-branch-guard.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "^(Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__.*__.*(create|update|batch|append|insert|post|send|comment|edit|write|reply).*)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 -I __HOME__/.claude/hooks/english-only-warn.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codegraph prompt-hook"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,3 @@
+# CLI tools installed outside Homebrew. One per line, tab-separated: name, install command, check command.
+agent-reach	uv tool install https://github.com/Panniantong/Agent-Reach/releases/download/v1.6.1/agent_reach-1.6.1-py3-none-any.whl && agent-reach setup	agent-reach version
+codegraph	curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/v1.6.2/install.sh | CODEGRAPH_VERSION=v1.6.2 sh	codegraph --version

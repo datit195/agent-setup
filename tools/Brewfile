@@ -1,0 +1,5 @@
+# Homebrew packages needed by agent-setup.
+brew "gh"
+brew "jq"
+brew "uv"
+brew "node"
