@@ -1,6 +1,9 @@
-# Third-party skills pinned to the installed commit. One per line, tab-separated: name, github owner/repo, full commit sha, path in repo,
-# and optionally skip=<agents> (comma-separated) for agents that must not get the skill.
-# skip=claude marks Claude Code plugin skills (agents/claude/plugins.lock): Claude keeps the plugin, the other agents get these copies.
+# Third-party skills pinned to a reviewed commit. One per line, tab-separated: name, github owner/repo, full commit sha, path in
+# repo, and optionally space-separated options:
+#   skip=<agents>  (comma-separated) agents that must not get the skill.
+#   track=<glob>   install.sh --update moves the entry to the highest version tag matching <glob> (default: the default branch).
+# skip=claude marks Claude Code plugin skills (agents/claude/plugins.lock): Claude keeps the plugin, the other agents get these
+# copies, which must be on the plugin's commit; install.sh --update keeps them there.
 anatomy	wheresryan22/anatomy	1482e8469b0a9e0d8cc18ea2740a01423d29ae80	.
 threejs-animation	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-animation
 threejs-asset-pipeline	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-asset-pipeline
@@ -15,7 +18,7 @@ threejs-postprocessing	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e9265
 threejs-react-three-fiber	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-react-three-fiber
 threejs-shaders	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-shaders
 threejs-textures	cloudai-x/threejs-skills	0e181866f095b5f06d005133876e926515390d95	skills/threejs-textures
-impeccable	pbakaus/impeccable	aeeb3d8c30b5f95aeeb3e893b0f1a308af8fdb8f	.agents/skills/impeccable
+impeccable	pbakaus/impeccable	aeeb3d8c30b5f95aeeb3e893b0f1a308af8fdb8f	.agents/skills/impeccable	track=skill-v*
 taste-skill	Leonxlnx/taste-skill	9b4bf937a1f69348126959c15d2f99a73e65699b	skills/taste-skill	skip=claude
 gsap-core	greensock/gsap-skills	aed9cfd3277740755f6bfc1155c7aa645403b760	skills/gsap-core	skip=claude
 gsap-frameworks	greensock/gsap-skills	aed9cfd3277740755f6bfc1155c7aa645403b760	skills/gsap-frameworks	skip=claude
@@ -25,20 +28,20 @@ gsap-react	greensock/gsap-skills	aed9cfd3277740755f6bfc1155c7aa645403b760	skills
 gsap-scrolltrigger	greensock/gsap-skills	aed9cfd3277740755f6bfc1155c7aa645403b760	skills/gsap-scrolltrigger	skip=claude
 gsap-timeline	greensock/gsap-skills	aed9cfd3277740755f6bfc1155c7aa645403b760	skills/gsap-timeline	skip=claude
 gsap-utils	greensock/gsap-skills	aed9cfd3277740755f6bfc1155c7aa645403b760	skills/gsap-utils	skip=claude
-brainstorming	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/brainstorming	skip=claude
-diagnosing-superpowers	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/diagnosing-superpowers	skip=claude
-dispatching-parallel-agents	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/dispatching-parallel-agents	skip=claude
-executing-plans	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/executing-plans	skip=claude
-finishing-a-development-branch	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/finishing-a-development-branch	skip=claude
-receiving-code-review	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/receiving-code-review	skip=claude
-requesting-code-review	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/requesting-code-review	skip=claude
-subagent-driven-development	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/subagent-driven-development	skip=claude
-systematic-debugging	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/systematic-debugging	skip=claude
-test-driven-development	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/test-driven-development	skip=claude
-using-git-worktrees	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/using-git-worktrees	skip=claude
-using-superpowers	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/using-superpowers	skip=claude
-verification-before-completion	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/verification-before-completion	skip=claude
-writing-plans	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/writing-plans	skip=claude
-writing-skills	obra/superpowers	22f0b463e7a5e579904dd6211a520321035526f7	skills/writing-skills	skip=claude
+brainstorming	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/brainstorming	skip=claude
+diagnosing-superpowers	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/diagnosing-superpowers	skip=claude
+dispatching-parallel-agents	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/dispatching-parallel-agents	skip=claude
+executing-plans	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/executing-plans	skip=claude
+finishing-a-development-branch	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/finishing-a-development-branch	skip=claude
+receiving-code-review	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/receiving-code-review	skip=claude
+requesting-code-review	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/requesting-code-review	skip=claude
+subagent-driven-development	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/subagent-driven-development	skip=claude
+systematic-debugging	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/systematic-debugging	skip=claude
+test-driven-development	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/test-driven-development	skip=claude
+using-git-worktrees	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/using-git-worktrees	skip=claude
+using-superpowers	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/using-superpowers	skip=claude
+verification-before-completion	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/verification-before-completion	skip=claude
+writing-plans	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/writing-plans	skip=claude
+writing-skills	obra/superpowers	bb92a77741419a4ab5f06e711a283343f1ada0c3	skills/writing-skills	skip=claude
 harness	revfactory/harness	92d9f1b29e7af81acebf51a9fcd1832e739a1414	skills/harness	skip=claude
 evolve	revfactory/harness	92d9f1b29e7af81acebf51a9fcd1832e739a1414	skills/evolve	skip=claude

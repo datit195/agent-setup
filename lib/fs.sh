@@ -121,3 +121,52 @@ shared_skills() { link_skills "$HOME/.agents/skills"; }
 
 # The shared instruction file every agent links to.
 link_instructions() { link "$ROOT/build/AGENTS.full.md" "$1"; }
+
+# Is PATH (an entry of skill dir DIR) managed by this repo? Yes when this run
+# linked it, or, in a dir this run did not link into, when it is a link into
+# the repo. Anything else in a dir this run linked into is not ours.
+_skill_managed() {
+  local t
+  if in_list "$LINKED" "$2"; then printf 1; return; fi
+  if ! in_list "$SKILL_DIRS_DONE" "$1" && [ -L "$2" ]; then
+    t=$(readlink "$2")
+    case $t in "$ROOT"/*) printf 1; return ;; esac
+  fi
+  printf 0
+}
+
+# check_skill_dups AGENT DIR...: warn about every skill name found more than
+# once across DIRs (the skill dirs AGENT reads) and the extra lines in
+# $EXTRA_SKILLS ("name<TAB>path<TAB>1p|0p" for Claude plugin skills: 1p from
+# plugins.lock, 0p from other plugins), when at least one copy is not managed
+# by this repo. With --fix-duplicates, the unmanaged copies in DIRs are moved
+# to the backup dir when a managed copy exists; plugin skills are never moved.
+check_skill_dups() {
+  local agent=$1 d e rows="" name group paths p flag
+  shift
+  for d in "$@"; do
+    [ -d "$d" ] || continue
+    for e in "$d"/*; do
+      [ -d "$e" ] || continue
+      rows="$rows$(basename "$e")"$'\t'"$e"$'\t'"$(_skill_managed "$d" "$e")"$'\n'
+    done
+  done
+  rows="$rows${EXTRA_SKILLS:-}"
+  while IFS= read -r name <&3; do
+    [ -n "$name" ] || continue
+    group=$(printf '%s' "$rows" | awk -F '\t' -v n="$name" '$1 == n')
+    printf '%s\n' "$group" | cut -f3 | grep -q '^0' || continue
+    paths=$(printf '%s\n' "$group" | while IFS=$'\t' read -r _ p flag; do
+      case $flag in (1*) ;; (*p) p="$p (plugin)" ;; (*) p="$p (not managed)" ;; esac
+      printf '%s, ' "$(pretty "$p")"
+    done)
+    paths=${paths%, }
+    if [ "${FIX_DUPLICATES:-0}" = 1 ] && printf '%s\n' "$group" | cut -f3 | grep -q '^1'; then
+      while IFS=$'\t' read -r _ p flag; do
+        if [ "$flag" = 0 ]; then backup_move "$p"; fi
+      done < <(printf '%s\n' "$group")
+    else
+      warn "$agent: skill '$name' is in more than one place it reads: $paths (move the unmanaged copy away, or re-run with --fix-duplicates to move it to the backups)"
+    fi
+  done 3< <(printf '%s' "$rows" | awk -F '\t' 'NF { c[$1]++ } END { for (n in c) if (c[n] > 1) print n }' | LC_ALL=C sort)
+}

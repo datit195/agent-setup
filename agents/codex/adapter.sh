@@ -7,6 +7,7 @@ detect() { has_cmd codex || [ -d "$HOME/.codex" ]; }
 install() {
   link_instructions "$HOME/.codex/AGENTS.md"
   shared_skills
+  check_skill_dups codex "$HOME/.agents/skills" "$HOME/.codex/skills"
   codex_config
   codex_hooks
 }

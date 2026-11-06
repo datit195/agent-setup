@@ -117,11 +117,13 @@ _vendor_dir() {
 }
 
 # For each core/skills.lock entry, make sure vendor/<owner>__<repo>@<sha>/ holds
-# that commit (only the paths the lock needs from it), and record
+# that commit (only the paths the lock needs from it, plus .claude-plugin/ for
+# a Claude plugin's commit, read for its pinned catalog), and record
 # "name<TAB>skill dir<TAB>skip" in VENDORED_SKILLS.
 vendor_skills() {
-  local name repo sha path skip dir src entries="" skips="" done_dirs=$'\n' ok_dirs=$'\n'
-  while IFS=$'\t' read -r name repo sha path skip; do
+  local name repo sha path opts skip dir src want entries="" skips="" done_dirs=$'\n' ok_dirs=$'\n' plugins
+  plugins=$(lock_lines "$ROOT/agents/claude/plugins.lock" | cut -f2,3)
+  while IFS=$'\t' read -r name repo sha path opts; do
     [ -n "$name" ] || continue
     if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || [ -z "$repo" ]; then
       warn "skills.lock: bad entry for '$name'; skipped"
@@ -130,14 +132,16 @@ vendor_skills() {
     path=${path:-.}
     path=${path%/}
     entries="$entries$name"$'\t'"$repo"$'\t'"$sha"$'\t'"$path"$'\n'
-    skips="$skips$name"$'\t'"${skip#skip=}"$'\n'
+    skips="$skips$name"$'\t'"$(opt_value "$opts" skip)"$'\n'
   done < <(lock_lines "$ROOT/core/skills.lock")
   while IFS=$'\t' read -r name repo sha path; do
     [ -n "$name" ] || continue
     dir="$ROOT/vendor/${repo%%/*}__${repo#*/}@$sha"
     if ! in_list "$done_dirs" "$dir"; then
       done_dirs="$done_dirs$dir"$'\n'
-      if _vendor_dir "$dir" "$repo" "$sha" "$(_sparse_patterns "$entries" "$repo" "$sha")"; then
+      want=$(_sparse_patterns "$entries" "$repo" "$sha")
+      if [ -n "$want" ] && in_list $'\n'"$plugins"$'\n' "$repo"$'\t'"$sha"; then want="$want"$'\n'/.claude-plugin/; fi
+      if _vendor_dir "$dir" "$repo" "$sha" "$want"; then
         ok_dirs="$ok_dirs$dir"$'\n'
       fi
     fi

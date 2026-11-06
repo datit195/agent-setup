@@ -106,6 +106,8 @@ gh repo clone datit195/agent-setup ~/.agent-setup
 |---|---|
 | `--dry-run` | Print every action, change nothing |
 | `--agents claude,codex` | Only these agents. By default every detected agent is configured; a selected agent is configured even when it is not detected |
+| `--update` | Move the pins to the latest upstream versions, then install (see [Updating](#updating)) |
+| `--fix-duplicates` | Switch plugins installed from another marketplace to the locked one; move unmanaged duplicate skills to the backups |
 | `--skip-tools` | Skip the package manager step (Homebrew, apt-get/dnf/pacman or winget) and `tools/tools.lock` |
 | `--yes` | Install missing tools without asking |
 | `-h`, `--help` | Show help |
@@ -125,9 +127,22 @@ claude mcp list             # codegraph and playwright should be listed
 
 ### Updating
 
+Every third-party skill and Claude Code plugin is pinned to a reviewed commit (`core/skills.lock`, `agents/claude/plugins.lock`), so every machine and every agent runs the same version. To pick up the pinned versions on a machine:
+
 ```sh
 git -C ~/.agent-setup pull && ~/.agent-setup/install.sh
 ```
+
+To move the pins to the latest upstream versions, run once, on one machine:
+
+```sh
+~/.agent-setup/install.sh --update --dry-run   # show old -> new per entry, with compare links
+~/.agent-setup/install.sh --update             # rewrite the locks, then install
+```
+
+`--update` never commits: review with `git diff`, commit and push, then run the first command on the other machines.
+
+**Duplicates.** The installer warns when a plugin is already installed from another marketplace (it does not install a second copy), or when a skill is in more than one folder an agent reads. `install.sh --fix-duplicates` switches such plugins to the locked source and moves unmanaged duplicate skill folders to the backups.
 
 ## What you get
 
@@ -168,14 +183,14 @@ Pinned to a reviewed commit in `core/skills.lock` and fetched into `vendor/`. No
 
 ### Claude Code plugins
 
-Claude Code gets these as plugins (`agents/claude/plugins.lock`); every other agent gets the pinned skill copies above.
+Claude Code gets these as plugins (`agents/claude/plugins.lock`), installed under the id each author recommends and pinned to the same commit as the skill copies above, which every other agent gets.
 
-| Plugin | Marketplace |
-|---|---|
-| `taste-skill` | `Leonxlnx/taste-skill` |
-| `gsap-skills` | `greensock/gsap-skills` |
-| `superpowers` | `obra/superpowers` |
-| `harness` | `revfactory/harness` |
+| Plugin | Installed as | Pinned by |
+|---|---|---|
+| `superpowers` | `superpowers@claude-plugins-official` (Anthropic's official marketplace) | the official marketplace; the installer warns when it differs from the lock |
+| `taste-skill` | `taste-skill@taste-skill` | the installer (exact commit) |
+| `gsap-skills` | `gsap-skills@gsap-skills` | the installer (exact commit) |
+| `harness` | `harness@harness-marketplace` | the installer (exact commit) |
 
 ### MCP servers
 
@@ -268,7 +283,7 @@ Gemini CLI, GitHub Copilot, opencode, Devin, Amp, Kiro, Cline, Factory Droid, Ze
 - The Cursor and Antigravity apps get no env and keep permissions in their UI; only their CLIs are configured.
 - The Codex, Cursor and Antigravity setups are checked by the install test, not yet against real installs.
 - Some Windows config paths and the `codegraph` launcher on Windows are not verified.
-- Plugins install their current versions, not the reviewed ones.
+- `superpowers` follows Anthropic's official marketplace, which updates on its own; the installer warns when it moves away from the lock.
 
 Full list: [docs/reference.md#known-gaps](docs/reference.md#known-gaps).
 

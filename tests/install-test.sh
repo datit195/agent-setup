@@ -23,6 +23,12 @@ echo "OS: $os  sandbox HOME: $HOME"
 mkdir -p "$HOME/.agent-setup"
 (cd "$repo" && tar -cf - --exclude=./build --exclude=./vendor .) | (cd "$HOME/.agent-setup" && tar -xf -)
 
+# A stub claude CLI on PATH, so the MCP and plugin steps run (tests/claude-stub.sh).
+mkdir -p "$HOME/stub-bin"
+cp "$repo/tests/claude-stub.sh" "$HOME/stub-bin/claude"
+chmod +x "$HOME/stub-bin/claude"
+export PATH="$HOME/stub-bin:$PATH"
+
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 out="$HOME/.install-test-out"
@@ -220,5 +226,108 @@ jq -e '.decision == "allow"' "$HOME/.hook-out" >/dev/null || fail "antigravity w
 mv "$HOME/.agent-setup/core/hooks.off" "$HOME/.agent-setup/core/hooks"
 mv "$HOME/.claude/hooks.off" "$HOME/.claude/hooks"
 pass "hook commands exit 0 when their scripts are missing"
+
+echo "== locks and Claude plugins (stub claude CLI)"
+lockdir="$HOME/.agent-setup"
+plock="$lockdir/agents/claude/plugins.lock"
+slock="$lockdir/core/skills.lock"
+inst="$HOME/.claude/plugins/installed_plugins.json"
+known="$HOME/.claude/plugins/known_marketplaces.json"
+stublog="$HOME/.claude-stub.log"
+locked() { awk -F '\t' -v i="$1" '$1 == i { print $3 }' "$plock"; }
+isha() { jq -r --arg i "$1" '.plugins[$i][0].gitCommitSha // empty' "$inst"; }
+setsha() { jq --arg i "$1" --arg s "$2" '.plugins[$i][0].gitCommitSha = $s' "$inst" >"$inst.tmp" && mv "$inst.tmp" "$inst"; }
+grep -q 'skills.lock: .* pinned to' "$out" && fail "the locks in the repo disagree"
+grep -v '^#' "$plock" | while IFS=$'\t' read -r id _ sha _ how; do
+  [ "$(isha "$id")" = "$sha" ] || fail "$id is not installed at its locked commit $sha"
+  if [ "$how" = pinned ]; then
+    m=${id#*@}
+    jq -e --arg m "$m" '.[$m].source.source == "directory"' "$known" >/dev/null || fail "marketplace $m is not the pinned catalog"
+    jq -e --arg s "$sha" '.plugins[0].source.sha == $s' "$lockdir/build/claude-marketplaces/$m/.claude-plugin/marketplace.json" >/dev/null ||
+      fail "catalog $m is not pinned to $sha"
+  fi
+done
+jq -e '.plugins[0] | .version == "2.5.0" and .skills == ["./skills/taste-skill"] and .source.source == "github"' \
+  "$lockdir/build/claude-marketplaces/taste-skill/.claude-plugin/marketplace.json" >/dev/null || fail "taste-skill catalog does not keep the author's entry"
+pass "every plugin installed at its locked commit; pinned catalogs keep the author's entry"
+
+# A skip=claude copy on another commit than its plugin is reported.
+cp "$slock" "$HOME/skills.lock.orig"
+awk -F '\t' -v OFS='\t' '$1 == "brainstorming" { $3 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } { print }' "$HOME/skills.lock.orig" >"$slock"
+run --dry-run --skip-tools "$@"
+grep -q "skills.lock: brainstorming is at aaaaaaaaaaaa but plugin superpowers@claude-plugins-official is pinned to" "$out" || fail "lock mismatch not reported"
+cp "$HOME/skills.lock.orig" "$slock"
+pass "a skip=claude copy on another commit than its plugin is reported"
+
+# Pinned plugin on another commit: reinstalled at the lock. Official plugin on
+# another commit while its marketplace offers the lock: reinstalled too.
+setsha gsap-skills@gsap-skills 0000000000000000000000000000000000000000
+setsha superpowers@claude-plugins-official bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+: >"$stublog"
+run --yes --skip-tools "$@"
+grep -q '^plugin uninstall --keep-data gsap-skills@gsap-skills' "$stublog" || fail "gsap-skills was not reinstalled"
+[ "$(isha gsap-skills@gsap-skills)" = "$(locked gsap-skills@gsap-skills)" ] || fail "gsap-skills is not back at the lock"
+[ "$(isha superpowers@claude-plugins-official)" = "$(locked superpowers@claude-plugins-official)" ] ||
+  { claude plugin marketplace list --json; ls -laR "$HOME/.claude/plugins/marketplaces"; fail "superpowers is not back at the lock"; }
+pass "plugins on another commit are reinstalled at the locked commit"
+
+# The official marketplace offers another commit than the lock: warn only.
+off="$HOME/.claude/plugins/marketplaces/claude-plugins-official/.claude-plugin/marketplace.json"
+cp "$off" "$HOME/official.orig"
+jq '.plugins[0].source.sha = "cccccccccccccccccccccccccccccccccccccccc"' "$HOME/official.orig" >"$off"
+setsha superpowers@claude-plugins-official cccccccccccccccccccccccccccccccccccccccc
+run --yes --skip-tools "$@"
+grep -q "superpowers@claude-plugins-official is installed at cccccccccccc, plugins.lock pins" "$out" || fail "official drift not reported"
+cp "$HOME/official.orig" "$off"
+run --yes --skip-tools "$@"
+pass "official plugin on another commit than the lock: warned, then reinstalled once the marketplace offers the lock"
+
+# A second copy of a plugin from another marketplace: warn, no second install.
+jq '.["superpowers-dev"] = {source: {source: "github", repo: "obra/superpowers"}, installLocation: "/nonexistent"}' "$known" >"$known.tmp" && mv "$known.tmp" "$known"
+jq '.plugins["superpowers@superpowers-dev"] = [{scope: "user", installPath: "/nonexistent", version: "7.0.2", gitCommitSha: "22f0b463e7a5e579904dd6211a520321035526f7"}]
+  | del(.plugins["superpowers@claude-plugins-official"])' "$inst" >"$inst.tmp" && mv "$inst.tmp" "$inst"
+: >"$stublog"
+run --yes --skip-tools "$@"
+grep -q "WARN: claude: superpowers is already installed as superpowers@superpowers-dev, so superpowers@claude-plugins-official was not installed as a second copy. Switch with: claude plugin uninstall superpowers@superpowers-dev && claude plugin install superpowers@claude-plugins-official" "$out" ||
+  fail "duplicate plugin not reported with the switch commands"
+grep -q 'plugin install superpowers@' "$stublog" && fail "a second copy of superpowers was installed"
+pass "plugin installed from another marketplace: warned with the switch commands, no second copy"
+run --yes --skip-tools --fix-duplicates "$@"
+grep -q '^plugin uninstall superpowers@superpowers-dev' "$stublog" || fail "--fix-duplicates did not uninstall the other copy"
+grep -q '^plugin marketplace remove superpowers-dev' "$stublog" || fail "--fix-duplicates did not remove the emptied marketplace"
+jq -e '.plugins | has("superpowers@claude-plugins-official") and (has("superpowers@superpowers-dev") | not)' "$inst" >/dev/null || fail "superpowers was not switched"
+ls "$HOME"/.agent-setup-backups/*/.claude/plugins/installed_plugins.json >/dev/null 2>&1 || fail "plugin records were not backed up"
+pass "--fix-duplicates switches the plugin to the locked marketplace (records backed up)"
+
+# Duplicate skills: an unmanaged copy next to a managed one, for Codex (and
+# Cursor, which reads ~/.codex/skills) and Claude (next to a plugin skill).
+mkdir -p "$HOME/.codex/skills/anatomy" "$HOME/.claude/skills/harness" "$HOME/.cursor/skills/mine"
+printf -- '---\nname: x\n---\n' | tee "$HOME/.codex/skills/anatomy/SKILL.md" "$HOME/.claude/skills/harness/SKILL.md" >"$HOME/.cursor/skills/mine/SKILL.md"
+run --yes --skip-tools "$@"
+grep -q "WARN: codex: skill 'anatomy' is in more than one place it reads: .*\.agents/skills/anatomy, .*\.codex/skills/anatomy (not managed)" "$out" || fail "codex skill duplicate not reported"
+grep -q "WARN: cursor: skill 'anatomy'" "$out" || fail "cursor skill duplicate not reported"
+grep -q "WARN: claude: skill 'harness' is in more than one place it reads: .*\.claude/skills/harness (not managed)" "$out" || fail "claude plugin skill duplicate not reported"
+grep -q "skill 'mine'" "$out" && fail "a skill found once was reported"
+[ -d "$HOME/.codex/skills/anatomy" ] && [ -d "$HOME/.claude/skills/harness" ] || fail "a duplicate skill was moved without --fix-duplicates"
+pass "duplicate skills reported with paths, nothing moved"
+run --yes --skip-tools --fix-duplicates "$@"
+[ ! -e "$HOME/.codex/skills/anatomy" ] && [ ! -e "$HOME/.claude/skills/harness" ] || fail "--fix-duplicates did not move the unmanaged copies"
+ls -d "$HOME"/.agent-setup-backups/*/.codex/skills/anatomy "$HOME"/.agent-setup-backups/*/.claude/skills/harness >/dev/null || fail "moved skills are not in the backups"
+[ -d "$HOME/.cursor/skills/mine" ] || fail "a user skill was moved"
+pass "--fix-duplicates moves unmanaged duplicates to the backups"
+
+run --yes --skip-tools "$@"
+grep -q '^0 change(s) made' "$out" || fail "run after the plugin and skill fixes made changes"
+grep -q 'WARN: .*\(skill\|plugin\|skills.lock\)' "$out" && fail "warnings left after the fixes"
+pass "after the fixes: 0 changes, no plugin or skill warnings"
+
+echo "== --update --dry-run"
+before=$(snapshot)
+run --update --dry-run --skip-tools "$@"
+grep -q '^== Update ==' "$out" && grep -q 'plugin superpowers@claude-plugins-official: ' "$out" && grep -q 'skills cloudai-x/threejs-skills' "$out" ||
+  fail "--update --dry-run printed no per-entry summary"
+grep -q 'Dry run: the lock files were not written' "$out" || fail "--update --dry-run printed no next steps"
+[ "$before" = "$(snapshot)" ] || fail "--update --dry-run changed files"
+pass "--update --dry-run shows the changes and writes nothing"
 
 echo "ALL CHECKS PASSED ($os)"

@@ -57,6 +57,9 @@ in_list() { case $1 in *$'\n'"$2"$'\n'*) return 0 ;; esac; return 1; }
 # Escape a string for use inside an extended regex.
 re_escape() { printf '%s' "$1" | sed 's/[][\.*^$+?(){}|/]/\\&/g'; }
 
+# opt_value OPTS KEY: the value of KEY=value in the space-separated OPTS.
+opt_value() { printf ' %s ' "$1" | tr '\t' ' ' | sed -n "s/.* $2=\([^ ]*\) .*/\1/p"; }
+
 # Print non-comment, non-blank lines of a lock/config file.
 lock_lines() {
   [ -f "$1" ] || return 0

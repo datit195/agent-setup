@@ -16,12 +16,16 @@ Usage: install.sh [options]
                      known: $ALL_AGENTS
   --skip-tools       skip package manager and tools.lock installs
   --yes              install missing tools without asking
+  --update           move core/skills.lock and agents/claude/plugins.lock to the latest
+                     upstream versions (shows old -> new), then install; never commits
+  --fix-duplicates   uninstall Claude plugins installed from another marketplace than
+                     plugins.lock's, and move unmanaged duplicate skill dirs to the backups
   --allow-any-root   allow running from a checkout other than ~/.agent-setup (tests)
   -h, --help         show this help
 EOF
 }
 
-DRY_RUN=0 YES=0 SKIP_TOOLS=0 ANY_ROOT=0 SELECTED=""
+DRY_RUN=0 YES=0 SKIP_TOOLS=0 ANY_ROOT=0 UPDATE=0 FIX_DUPLICATES=0 SELECTED=""
 while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) DRY_RUN=1 ;;
@@ -29,6 +33,8 @@ while [ $# -gt 0 ]; do
     --agents=*) SELECTED=$(printf '%s' "${1#*=}" | tr ',' ' ') ;;
     --skip-tools) SKIP_TOOLS=1 ;;
     --yes | -y) YES=1 ;;
+    --update) UPDATE=1 ;;
+    --fix-duplicates) FIX_DUPLICATES=1 ;;
     --allow-any-root) ANY_ROOT=1 ;;
     -h | --help) usage; exit 0 ;;
     *) printf 'Unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
@@ -36,7 +42,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-for lib in common fs json build tools hooks; do
+for lib in common fs json build tools hooks locks; do
   # shellcheck source=/dev/null
   . "$ROOT/lib/$lib.sh"
 done
@@ -97,13 +103,21 @@ git_identity
 section "Shell env"
 shell_env
 
-# 4. Build
+# 4. Update the locks (--update)
+UPDATED=0
+if [ "$UPDATE" = 1 ]; then
+  section "Update"
+  update_locks
+fi
+
+# 5. Build
 section "Build"
+check_locks || true
 build_agents_md
 vendor_skills
 override_skills
 
-# 5. Agents
+# 6. Agents
 section "Agents"
 installed_any=0
 for name in $ALL_AGENTS; do
@@ -133,3 +147,15 @@ done
 [ "$installed_any" = 1 ] || log "No agents detected."
 
 summary
+if [ "$UPDATE" = 1 ]; then
+  section "Next steps"
+  if [ "$DRY_RUN" = 1 ]; then
+    log "Dry run: the lock files were not written. Run install.sh --update to apply."
+  elif [ "$UPDATED" = 0 ]; then
+    log "Nothing to commit: every lock entry was already up to date."
+  else
+    log "1. Review the changes: git -C $(pretty "$ROOT") diff"
+    log "2. Commit and push them (agent-setup never commits for you)."
+    log "3. On every other machine: git -C ~/.agent-setup pull && ~/.agent-setup/install.sh"
+  fi
+fi

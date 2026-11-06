@@ -1,6 +1,6 @@
 ---
 title: Agent setup reference
-description: Maintainer reference for agent-setup covering layout, per-agent paths, vendoring, hooks, install steps, editing, backups and known gaps.
+description: Maintainer reference for agent-setup covering layout, vendoring, plugin pins, updates, duplicates, per-agent paths, hooks, install steps, editing, backups and known gaps.
 updated: 2026-11-07
 status: active
 ---
@@ -13,6 +13,9 @@ This page holds the details behind the [README](../README.md): how the repo is l
 
 - [Layout](#layout)
 - [Third-party skills and vendoring](#third-party-skills-and-vendoring)
+- [Claude Code plugins](#claude-code-plugins)
+- [Updating the pins](#updating-the-pins)
+- [Duplicates](#duplicates)
 - [Per-agent paths](#per-agent-paths)
 - [Hooks](#hooks)
 - [Install internals](#install-internals)
@@ -27,20 +30,20 @@ This page holds the details behind the [README](../README.md): how the repo is l
 |---|---|
 | `core/AGENTS.md`, `core/rules/*.md` | Shared instructions and rules (including coordinator mode) |
 | `core/skills/<name>/` | Own skills |
-| `core/skills.lock` | Third-party skills pinned to a commit (fetched into `vendor/`) |
+| `core/skills.lock` | Third-party skills pinned to a commit (fetched into `vendor/`); options `skip=<agents>` and `track=<tag glob>` |
 | `core/skills.overrides` | Replacement descriptions for third-party skills |
 | `core/mcp.json` | Shared MCP servers; `"autoApprove": true` lets agents call a server's tools without asking |
 | `core/hooks.json`, `core/hooks/` | Hook definitions for every agent and the hook scripts |
 | `agents/<name>/adapter.sh` | Per-agent installer (`detect` and `install`) |
 | `shell/env.sh` | Shared agent env (e.g. `IMPECCABLE_NO_TELEMETRY=1`): sourced from `~/.zshrc` / `~/.bashrc`, and the source of Claude Code's `env` and Codex's `shell_environment_policy.set` |
-| `agents/claude/` | Claude Code only: `CLAUDE.md` stub, `rules/claude-extras.md` (attribution), `settings.base.json`, `plugins.lock` |
+| `agents/claude/` | Claude Code only: `CLAUDE.md` stub, `rules/claude-extras.md` (attribution), `settings.base.json`, `plugins.lock` (plugins pinned to a commit) |
 | `tools/Brewfile`, `tools/tools.lock` | CLI tools (`tools.lock` lines may name the OSes they apply to) |
 | `git.conf` | Global git identity (set only when unset) |
 | `issue-workflow/` | CI templates referenced by the issue-workflow rule |
-| `lib/` | Installer helpers (`toml_set.py` adds missing keys to Codex's `config.toml`) |
-| `tests/install-test.sh` | Sandbox-HOME install test, run by CI on macOS, Ubuntu and Windows |
+| `lib/` | Installer helpers (`toml_set.py` adds missing keys to Codex's `config.toml`; `locks.sh` checks and updates the lock files) |
+| `tests/install-test.sh` | Sandbox-HOME install test, run by CI on macOS, Ubuntu and Windows, with a stub `claude` CLI (`tests/claude-stub.sh`) |
 | `docs/` | This reference |
-| `build/`, `vendor/` | Generated, gitignored |
+| `build/`, `vendor/` | Generated, gitignored (`build/claude-marketplaces/` holds the pinned plugin catalogs) |
 
 `build/AGENTS.full.md` is `core/AGENTS.md` plus every `core/rules/*.md` (frontmatter stripped). Agents that read one instruction file link to it. The installer warns when it passes 32 KiB, the Codex limit; Antigravity reads at most 24 KB per file, so keep it below that (about 15 KB now).
 
@@ -52,13 +55,13 @@ Nothing is kept twice. Where an agent's format forces its own file (Codex `confi
 |---|---|---|
 | `anatomy` | `wheresryan22/anatomy` (whole repo) | `1482e84` |
 | `threejs-*` (13 skills) | `cloudai-x/threejs-skills`, `skills/<name>` | `0e18186` |
-| `impeccable` | `pbakaus/impeccable`, `.agents/skills/impeccable` | release `skill-v4.7.0` = `aeeb3d8` |
+| `impeccable` | `pbakaus/impeccable`, `.agents/skills/impeccable` | release `skill-v4.7.0` = `aeeb3d8` (`track=skill-v*`: `--update` follows its releases) |
 | `taste-skill` | `Leonxlnx/taste-skill`, `skills/taste-skill` | `9b4bf93` (plugin 2.5.0) |
 | `gsap-*` (8 skills) | `greensock/gsap-skills`, `skills/gsap-*` | `aed9cfd` (plugin 1.0.0) |
-| superpowers (15 skills) | `obra/superpowers`, `skills/*` | `22f0b46` (plugin 7.0.2) |
+| superpowers (15 skills) | `obra/superpowers`, `skills/*` | `bb92a77` (plugin 7.0.0, the official marketplace's pin) |
 | `harness`, `evolve` | `revfactory/harness`, `skills/harness`, `skills/evolve` | `92d9f1b` (plugin 2.1.0) |
 
-The last four are the skills Claude Code gets from its plugins (`agents/claude/plugins.lock`). Their lock lines end with `skip=claude`: Claude keeps the plugins, every other agent gets these pinned copies. Claude's plugins install their current versions; the copies stay at the commits above until `skills.lock` is bumped.
+The last four are the skills Claude Code gets from its plugins (`agents/claude/plugins.lock`). Their lock lines end with `skip=claude`: Claude keeps the plugins, every other agent gets these pinned copies. A `skip=claude` copy must be on the same commit as its plugin in `plugins.lock`; every run checks this and warns per mismatch, and `--update` moves both together.
 
 Audit notes (nothing runs at install time; scripts run only when an agent invokes them): gsap and harness are Markdown only. superpowers has shell and Node helpers, including a local brainstorming web server. taste-skill is large (about 39 MB, 1,600 files) and its Node scripts download images (Wikimedia, picsum), icon sets and Google Fonts and start local servers.
 
@@ -69,6 +72,51 @@ Vendoring is sparse: each `owner/repo@sha` is fetched once as a shallow, blob-le
 ### Overrides
 
 `core/skills.overrides` lines are `name<TAB>description`, optionally followed by `<TAB>explicit`, which also writes `policy.allow_implicit_invocation: false` into the copy's `agents/openai.yaml` so Codex uses the skill only when asked. For each one, the installer copies the vendored skill to `build/skills/<name>/`, replaces the `description:` in its `SKILL.md` frontmatter, and links that copy instead of the vendor dir. The pinned checkout is never edited, and the copy is rebuilt only when the source or the override changes.
+
+## Claude Code plugins
+
+`agents/claude/plugins.lock` lines are `<plugin>@<marketplace>`, the plugin's GitHub repo, the commit, the version at that commit, and how it is pinned (`pinned` or `official`). The id is the one each author recommends for Claude Code, so a machine that installed a plugin from its README gets the same id, not a second copy.
+
+| Plugin | Author's recommendation (README) | Id used | Pin |
+|---|---|---|---|
+| `superpowers` | Anthropic's official marketplace first (`/plugin install superpowers@claude-plugins-official`), else `obra/superpowers-marketplace` | `superpowers@claude-plugins-official` | `official`: `bb92a77`, 7.0.0 |
+| `taste-skill` | `/plugin marketplace add Leonxlnx/taste-skill`, `/plugin install taste-skill@taste-skill` (not in the official marketplace) | `taste-skill@taste-skill` | `pinned`: `9b4bf93`, 2.5.0 |
+| `gsap-skills` | `/plugin marketplace add greensock/gsap-skills` (not in the official marketplace) | `gsap-skills@gsap-skills` | `pinned`: `aed9cfd`, 1.0.0 |
+| `harness` | `/plugin marketplace add revfactory/harness`, `/plugin install harness@harness-marketplace` (not in the official marketplace) | `harness@harness-marketplace` | `pinned`: `92d9f1b`, 2.1.0 |
+
+How Claude Code versions plugins (checked against the [plugin docs](https://code.claude.com/docs/en/plugins/loading.md) and Claude Code 2.1.319): a marketplace can be pinned only to a branch or tag (`owner/repo#ref`; a commit sha is refused), while a plugin entry in a marketplace can carry a `sha`. Third-party marketplaces do not auto-update by default; the official ones do. An installed plugin is replaced only when its version string changes, so two commits with the same `version` count as the same install.
+
+- **`pinned`:** the installer writes `build/claude-marketplaces/<marketplace>/.claude-plugin/marketplace.json`, a local catalog with the author's marketplace name and the author's entry for the plugin (read from the vendored commit), its `source` fixed to the locked `sha`. It registers that folder with `claude plugin marketplace add <folder>`; when a marketplace of the same name was added from GitHub before, this re-points it in place and the plugin stays installed. Claude Code then installs exactly the locked commit. When the installed commit (`gitCommitSha` in `~/.claude/plugins/installed_plugins.json`) differs from the lock, the installer reinstalls the plugin (`claude plugin uninstall --keep-data`, then `claude plugin install`), keeping its data.
+- **`official`:** Anthropic's marketplace pins the commit in its own catalog and auto-updates, and its name is reserved, so it cannot be pinned locally. The lock records the commit and version the official catalog offered when the lock was last updated. When the installed commit differs from the lock, the installer reinstalls the plugin if the local official catalog offers the locked commit, and otherwise warns with the commands to update; run `install.sh --update` to review and adopt the new commit.
+
+## Updating the pins
+
+`install.sh --update` resolves the latest upstream version of every lock entry, rewrites `core/skills.lock` and `agents/claude/plugins.lock`, prints `old -> new` per plugin and per skills repo with a GitHub compare link, then runs the normal install. With `--dry-run` it prints the same summary and writes nothing (the rest of the dry run still shows the current locks). It never commits; it ends with the next steps: review with `git diff`, commit and push, then `git pull && install.sh` on every other machine.
+
+Where the new versions come from:
+
+- `pinned` plugins and skills: the head of the repo's default branch (`git ls-remote`).
+- `official` plugins: the commit Anthropic's official marketplace catalog pins at its current head.
+- Skills with `track=<glob>`: the highest version tag matching the glob (`impeccable` follows its `skill-v*` releases).
+- `skip=claude` copies: always the commit of their plugin.
+- Versions: the plugin's `plugin.json`, else its marketplace entry, else the short commit (as Claude Code computes them).
+
+A repo that cannot be resolved keeps its pin, with a warning. `--update` needs `git`, `curl` and `jq`.
+
+## Duplicates
+
+**Plugins.** Before installing `<plugin>@<marketplace>`, the installer lists the installed plugins (`claude plugin list --json`). When the same plugin name is installed from another marketplace (for example `superpowers@superpowers-dev`), it does not install a second copy and warns with the commands to switch: `claude plugin uninstall <plugin>@<other> && claude plugin install <plugin>@<marketplace>`. With `--fix-duplicates` it backs up `~/.claude/settings.json` and Claude's plugin records, uninstalls the other copy, removes that marketplace when no installed plugin is left in it (never one in `plugins.lock`), and installs the locked one.
+
+**Skills.** Each focus agent's adapter lists the skill folders in every directory the agent reads and warns when a name appears more than once and at least one copy is not managed by agent-setup (a managed copy is a link this run made, or a link into this repo in a directory this run did not link into). It also catches an unmanaged folder with the same name as a managed skill. The directories checked:
+
+| Agent | Skill directories checked |
+|---|---|
+| Claude Code | `~/.claude/skills`, plus the skills of installed user-scope plugins |
+| Codex | `~/.agents/skills`, `~/.codex/skills` |
+| Cursor | `~/.agents/skills`, `~/.claude/skills`, `~/.codex/skills`, `~/.cursor/skills` |
+| Antigravity | `~/.gemini/config/skills`, `~/.gemini/antigravity/skills` (legacy, unverified) |
+
+Two managed copies of the same skill (Cursor reads both `~/.agents/skills` and `~/.claude/skills`) are expected and not reported. With `--fix-duplicates`, an unmanaged copy is moved to the backup dir, and only when a managed copy of the name exists; plugin folders and a user's own skills found in two places are never moved.
 
 ## Per-agent paths
 
@@ -126,7 +174,7 @@ Hook commands use `/usr/bin/python3` when it works, else `python3`, `python` or 
 
 ## Install internals
 
-Steps, in order: tools, git identity, shell env, build (`build/AGENTS.full.md`, `vendor/` and `build/skills/`), then each agent.
+Steps, in order: tools, git identity, shell env, update (`--update` only), build (lock check, `build/AGENTS.full.md`, `vendor/` and `build/skills/`), then each agent (Claude Code also writes `build/claude-marketplaces/`).
 
 The repo must live at `~/.agent-setup`; the links and the Claude import stub depend on that path. `--allow-any-root` allows another checkout location (tests only).
 
@@ -138,7 +186,7 @@ The shell env step makes the shell rc files source `shell/env.sh` with one line 
 
 ## Editing
 
-Edit files in the repo. Rules, skills, hooks and `CLAUDE.md` are symlinks, so changes apply at once. After editing `core/AGENTS.md` or `core/rules/`, re-run `install.sh` to regenerate `build/AGENTS.full.md` (and, for Cursor, paste it again). After editing `core/mcp.json`, `core/hooks.json`, `core/skills.lock`, `core/skills.overrides`, `shell/env.sh`, `plugins.lock` or `settings.base.json`, re-run `install.sh`. Edits to `shell/env.sh` apply in new shells.
+Edit files in the repo. Rules, skills, hooks and `CLAUDE.md` are symlinks, so changes apply at once. After editing `core/AGENTS.md` or `core/rules/`, re-run `install.sh` to regenerate `build/AGENTS.full.md` (and, for Cursor, paste it again). After editing `core/mcp.json`, `core/hooks.json`, `core/skills.lock`, `core/skills.overrides`, `shell/env.sh`, `plugins.lock` or `settings.base.json`, re-run `install.sh`. To bump the third-party pins, use `install.sh --update` rather than editing the locks by hand. Edits to `shell/env.sh` apply in new shells.
 
 ## Adding an agent
 
@@ -167,5 +215,6 @@ Anything the installer replaces or edits is first saved under `~/.agent-setup-ba
 - Linux and Windows: app-only installs (no CLI, no config dir yet) of Cursor, Zed, Kiro, Devin and Antigravity are not detected, because detection looks in `/Applications` on macOS; select them with `--agents`.
 - `agent-reach setup` is only tested on macOS.
 - The Linux and Windows package-manager installs are exercised in CI only as a dry run.
-- Plugins install their current versions, not the reviewed ones.
+- `superpowers` comes from Anthropic's official marketplace, which auto-updates; until the lock is updated, a machine whose catalog moved ahead keeps a warning (the installer never moves it past the lock by itself).
+- A `pinned` plugin's catalog is a local folder in `build/`, so `claude plugin marketplace update` does not move it; that is intended (use `install.sh --update`).
 - Links to removed skills or rules are not cleaned up; delete them by hand.
