@@ -267,7 +267,8 @@ setsha superpowers@claude-plugins-official bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 run --yes --skip-tools "$@"
 grep -q '^plugin uninstall --keep-data gsap-skills@gsap-skills' "$stublog" || fail "gsap-skills was not reinstalled"
 [ "$(isha gsap-skills@gsap-skills)" = "$(locked gsap-skills@gsap-skills)" ] || fail "gsap-skills is not back at the lock"
-[ "$(isha superpowers@claude-plugins-official)" = "$(locked superpowers@claude-plugins-official)" ] || fail "superpowers is not back at the lock"
+[ "$(isha superpowers@claude-plugins-official)" = "$(locked superpowers@claude-plugins-official)" ] ||
+  { claude plugin marketplace list --json; ls -laR "$HOME/.claude/plugins/marketplaces"; fail "superpowers is not back at the lock"; }
 pass "plugins on another commit are reinstalled at the locked commit"
 
 # The official marketplace offers another commit than the lock: warn only.

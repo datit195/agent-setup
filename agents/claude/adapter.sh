@@ -101,6 +101,16 @@ claude_catalog() {
   act "write build/claude-marketplaces/$mkt (pinned to ${sha:0:12})" _install_file "$tmp" "$out"
 }
 
+# claude_catalog_sha MARKETS_JSON MARKET NAME: the commit MARKET's local
+# catalog pins plugin NAME to, or "".
+claude_catalog_sha() {
+  local loc f
+  loc=$(printf '%s' "$1" | jq -r --arg m "$2" '.[] | select(.name == $m) | .installLocation // empty' | tr -d '\r')
+  f="$loc/.claude-plugin/marketplace.json"
+  [ -n "$loc" ] && [ -f "$f" ] || f="$(claude_plugins_dir)/marketplaces/$2/.claude-plugin/marketplace.json"
+  jq -r --arg n "$3" '.plugins[] | select(.name == $n) | .source.sha // empty' "$f" 2>/dev/null | tr -d '\r' || true
+}
+
 _claude_reinstall() { claude plugin uninstall --keep-data "$1" >/dev/null && claude plugin install "$1"; }
 
 # Save Claude's plugin records before uninstalling anything.
@@ -180,8 +190,7 @@ claude_plugins() {
     [ -z "$cur" ] || [ "$cur" = "$sha" ] && continue
     offered=$sha
     if [ "$how" = official ]; then
-      offered=$(printf '%s' "$markets" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | .installLocation // empty' |
-        { read -r loc && jq -r --arg n "$name" '.plugins[] | select(.name == $n) | .source.sha // empty' "$loc/.claude-plugin/marketplace.json" 2>/dev/null; } || true)
+      offered=$(claude_catalog_sha "$markets" "$mkt" "$name")
     fi
     if [ "$offered" = "$sha" ]; then
       act "claude: reinstall plugin $id at ${sha:0:12} (installed: ${cur:0:12})" _claude_reinstall "$id"
