@@ -1,5 +1,6 @@
 # shellcheck shell=bash
-# Build step: generate build/AGENTS.full.md and vendor pinned third-party skills.
+# Build step: generate build/AGENTS.full.md, vendor pinned third-party skills
+# and apply skill description overrides.
 
 AGENTS_MAX_BYTES=32768   # Codex project-doc limit
 
@@ -42,20 +43,84 @@ build_agents_md() {
   act "generate build/AGENTS.full.md ($size bytes)" _install_file "$tmp" "$out"
 }
 
+# Sparse checkout state of a vendor checkout: its patterns, or "" for the whole tree.
+_sparse_state() {
+  [ "$(git -C "$1" config --bool core.sparseCheckout 2>/dev/null)" = true ] || return 0
+  cat "$1/.git/info/sparse-checkout" 2>/dev/null || true
+}
+
+# Re-apply the sparse patterns to the work tree. "sparse-checkout reapply"
+# (git 2.27+) also drops files checked out before sparse checkout was on;
+# older git falls back to read-tree.
+_sparse_update() {
+  git -C "$1" update-index -q --refresh >/dev/null 2>&1 || true
+  git -C "$1" sparse-checkout reapply >/dev/null 2>&1 || git -C "$1" read-tree -mu HEAD
+}
+
+# _apply_sparse DIR PATTERNS: limit the work tree to PATTERNS ("" = whole tree).
+_apply_sparse() {
+  local dir=$1 want=$2
+  mkdir -p "$dir/.git/info" || return 1
+  if [ -n "$want" ]; then
+    git -C "$dir" config core.sparseCheckout true &&
+      printf '%s\n' "$want" >"$dir/.git/info/sparse-checkout" &&
+      _sparse_update "$dir"
+  else
+    # Widen to everything first, then switch sparse checkout off.
+    git -C "$dir" config core.sparseCheckout true &&
+      printf '/*\n' >"$dir/.git/info/sparse-checkout" &&
+      _sparse_update "$dir" &&
+      git -C "$dir" config core.sparseCheckout false &&
+      rm -f "$dir/.git/info/sparse-checkout"
+  fi
+}
+
+# _fetch_commit DIR URL SHA PATTERNS: shallow, blob-less fetch of one commit,
+# checking out only PATTERNS ("" = whole tree); git fetches just those blobs.
 _fetch_commit() {
-  local dir=$1 url=$2 sha=$3
+  local dir=$1 url=$2 sha=$3 want=$4
   rm -rf "$dir" && mkdir -p "$dir" &&
     git -C "$dir" init -q &&
     git -C "$dir" remote add origin "$url" &&
-    git -C "$dir" fetch -q --depth 1 origin "$sha" &&
+    git -C "$dir" config remote.origin.promisor true &&
+    git -C "$dir" config remote.origin.partialclonefilter blob:none &&
+    { [ -z "$want" ] || {
+      mkdir -p "$dir/.git/info" &&
+        git -C "$dir" config core.sparseCheckout true &&
+        printf '%s\n' "$want" >"$dir/.git/info/sparse-checkout"
+    }; } &&
+    git -C "$dir" fetch -q --depth 1 --filter=blob:none origin "$sha" &&
     git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD ||
     { rm -rf "$dir"; return 1; }
 }
 
+# _sparse_patterns ENTRIES REPO SHA: sparse patterns for every lock path of
+# REPO@SHA, one per line; prints nothing when any path is "." (whole tree).
+_sparse_patterns() {
+  printf '%s' "$1" | awk -F '\t' -v repo="$2" -v sha="$3" '
+    $2 == repo && $3 == sha { if ($4 == ".") full = 1; else if (!seen[$4]++) out = out "/" $4 "/\n" }
+    END { if (!full) printf "%s", out }'
+}
+
+# _vendor_dir DIR REPO SHA PATTERNS: make DIR a checkout of REPO@SHA limited to
+# PATTERNS. Returns 1 when the checkout is missing after trying (act warned).
+_vendor_dir() {
+  local dir=$1 repo=$2 sha=$3 want=$4 base
+  base="vendor/$(basename "$dir")"
+  if [ -d "$dir/.git" ] && [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" = "$sha" ]; then
+    [ "$(_sparse_state "$dir")" = "$want" ] && return 0
+    act "update checked-out paths of $base" _apply_sparse "$dir" "$want"
+    return 0
+  fi
+  act "fetch $repo@${sha:0:12} into vendor/" _fetch_commit "$dir" "https://github.com/$repo.git" "$sha" "$want"
+  [ "$DRY_RUN" = 1 ] || [ -d "$dir/.git" ]
+}
+
 # For each core/skills.lock entry, make sure vendor/<owner>__<repo>@<sha>/ holds
-# that commit, and record "name<TAB>skill dir" in VENDORED_SKILLS.
+# that commit (only the paths the lock needs from it), and record
+# "name<TAB>skill dir" in VENDORED_SKILLS.
 vendor_skills() {
-  local name repo sha path dir src fetched=$'\n'
+  local name repo sha path dir src entries="" done_dirs=$'\n' ok_dirs=$'\n'
   while IFS=$'\t' read -r name repo sha path; do
     [ -n "$name" ] || continue
     if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || [ -z "$repo" ]; then
@@ -63,22 +128,83 @@ vendor_skills() {
       continue
     fi
     path=${path:-.}
+    path=${path%/}
+    entries="$entries$name"$'\t'"$repo"$'\t'"$sha"$'\t'"$path"$'\n'
+  done < <(lock_lines "$ROOT/core/skills.lock")
+  while IFS=$'\t' read -r name repo sha path; do
+    [ -n "$name" ] || continue
     dir="$ROOT/vendor/${repo%%/*}__${repo#*/}@$sha"
-    if in_list "$fetched" "$dir" ||
-      { [ -d "$dir/.git" ] && [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" = "$sha" ]; }; then
-      :
-    else
-      fetched="$fetched$dir"$'\n'
-      act "fetch $repo@${sha:0:12} into vendor/" _fetch_commit "$dir" "https://github.com/$repo.git" "$sha"
-      if [ "$DRY_RUN" != 1 ] && [ ! -d "$dir/.git" ]; then
-        continue   # act already warned
+    if ! in_list "$done_dirs" "$dir"; then
+      done_dirs="$done_dirs$dir"$'\n'
+      if _vendor_dir "$dir" "$repo" "$sha" "$(_sparse_patterns "$entries" "$repo" "$sha")"; then
+        ok_dirs="$ok_dirs$dir"$'\n'
       fi
     fi
-    if [ "$path" = "." ]; then src=$dir; else src="$dir/${path%/}"; fi
+    in_list "$ok_dirs" "$dir" || continue   # act already warned
+    if [ "$path" = "." ]; then src=$dir; else src="$dir/$path"; fi
     if [ "$DRY_RUN" != 1 ] && [ ! -d "$src" ]; then
       warn "skills.lock: '$path' not found in $repo@${sha:0:12}; skill $name skipped"
       continue
     fi
     VENDORED_SKILLS="$VENDORED_SKILLS$name"$'\t'"$src"$'\n'
-  done < <(lock_lines "$ROOT/core/skills.lock")
+  done <<EOF
+$entries
+EOF
+}
+
+# Print SKILL.md with the frontmatter description replaced by $SKILL_DESC
+# (single-line, quoted, folded or literal block forms). Fails if none found.
+# Keeps a missing final newline missing, so only the description differs.
+_set_description() {
+  local eol=1
+  [ -z "$(tail -c 1 "$1")" ] || eol=0
+  SKILL_DESC=$2 awk '
+    function q(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return "\"" s "\"" }
+    NR == 1 && /^---[[:space:]]*$/ { fm = 1; print; next }
+    fm && /^---[[:space:]]*$/ { fm = 0; skip = 0; print; next }
+    fm && skip && /^[[:space:]]/ { next }
+    fm { skip = 0 }
+    fm && /^description:/ { print "description: " q(ENVIRON["SKILL_DESC"]); skip = 1; done = 1; next }
+    { print }
+    END { if (!done) exit 3 }
+  ' "$1" | if [ "$eol" = 1 ]; then cat; else perl -pe 'chomp if eof'; fi
+}
+
+_replace_dir() { rm -rf "$2" && mkdir -p "$(dirname "$2")" && mv "$1" "$2"; }
+
+# For each core/skills.overrides entry ("name<TAB>description"), build
+# build/skills/<name>/ as a copy of the vendored skill with that description,
+# and point VENDORED_SKILLS at the copy. The vendor checkout is never edited.
+override_skills() {
+  local file="$ROOT/core/skills.overrides" name desc src out stage rest
+  while IFS=$'\t' read -r name desc; do
+    [ -n "$name" ] && [ -n "$desc" ] || continue
+    src=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 == n { print $2; exit }')
+    if [ -z "$src" ]; then
+      warn "skills.overrides: '$name' is not a vendored skill; skipped"
+      continue
+    fi
+    out="$ROOT/build/skills/$name"
+    if [ -f "$src/SKILL.md" ]; then
+      stage="$TMP_DIR/skill-$name"
+      rm -rf "$stage" && cp -Rp "$src" "$stage" && rm -rf "$stage/.git" || { warn "could not copy skill $name"; continue; }
+      if ! _set_description "$src/SKILL.md" "$desc" >"$stage/SKILL.md"; then
+        warn "skills.overrides: no description in $name/SKILL.md; override skipped"
+        continue
+      fi
+      if [ -d "$out" ] && diff -rq "$stage" "$out" >/dev/null 2>&1; then
+        log "build/skills/$name up to date"
+      else
+        act "build build/skills/$name (description override)" _replace_dir "$stage" "$out"
+      fi
+    elif [ "$DRY_RUN" = 1 ]; then
+      act "build build/skills/$name (description override)"
+    else
+      warn "skills.overrides: $name has no SKILL.md; override skipped"
+      continue
+    fi
+    rest=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 != n')
+    [ -z "$rest" ] || rest="$rest"$'\n'
+    VENDORED_SKILLS="$rest$name"$'\t'"$out"$'\n'
+  done < <(lock_lines "$file")
 }
