@@ -1,10 +1,3 @@
----
-title: Agent setup
-description: One repo that installs the same rules, skills, MCP servers, hooks and settings into many AI coding agents on macOS, Linux, WSL and Windows.
-updated: 2026-11-07
-status: active
----
-
 # Agent setup
 
 <div align="center">
@@ -12,6 +5,8 @@ status: active
 ### One config for every AI coding agent on your machine
 
 **Rules · skills · MCP servers · hooks · settings, written once and installed into Claude Code, Codex, Cursor, Antigravity and 10 more agents**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 [![macOS](https://img.shields.io/badge/macOS-supported-blue.svg)](#supported-platforms)
 [![Linux / WSL](https://img.shields.io/badge/Linux_%2F_WSL-supported-blue.svg)](#supported-platforms)
@@ -36,6 +31,7 @@ status: active
 - [Known gaps](#known-gaps)
 - [Troubleshooting](#troubleshooting)
 - [Reference](#reference)
+- [License](#license)
 
 ## Why agent setup?
 
@@ -293,3 +289,7 @@ Full list: [docs/reference.md#known-gaps](docs/reference.md#known-gaps).
 ## Reference
 
 Layout, per-agent paths, vendoring and overrides, hook generation, install internals, editing, adding an agent, backups and the full list of known gaps: [docs/reference.md](docs/reference.md).
+
+## License
+
+MIT — see [LICENSE](LICENSE). The vendored third-party skills and Claude Code plugins keep their own licenses.
