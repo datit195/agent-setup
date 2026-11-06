@@ -92,7 +92,8 @@ def snippet(text):
 
 
 def main():
-    data = json.loads(sys.stdin.read())
+    # Bytes, not text: on Windows stdin text uses the ANSI code page, not UTF-8.
+    data = json.loads(sys.stdin.buffer.read())
     tool = data.get("tool_name") or ""
     ti = data.get("tool_input") or {}
     if not isinstance(ti, dict):
