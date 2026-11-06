@@ -10,6 +10,7 @@ detect() {
 install() {
   link_instructions "$HOME/.gemini/GEMINI.md"
   link_skills "$HOME/.gemini/config/skills"
+  check_skill_dups antigravity "$HOME/.gemini/config/skills" "$HOME/.gemini/antigravity/skills"
   mcp_merge_file "$HOME/.gemini/config/mcp_config.json" '.mcpServers' '{command: $c, args: $a, env: $e}'
   antigravity_hooks
   antigravity_cli_settings

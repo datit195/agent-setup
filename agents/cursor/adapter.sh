@@ -19,6 +19,7 @@ install() {
     fi
   fi
   shared_skills
+  check_skill_dups cursor "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills"
   mcp_merge_file "$HOME/.cursor/mcp.json" '.mcpServers' '{type: "stdio", command: $c, args: $a, env: $e}'
   cursor_cli_config
 }
