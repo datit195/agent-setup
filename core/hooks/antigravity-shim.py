@@ -18,6 +18,7 @@
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -129,7 +130,9 @@ def resolve(cmd):
     if len(cmd) == 1 and cmd[0].endswith((".py", ".sh")):
         if not os.path.isfile(cmd[0]):
             return None
-        return [sys.executable, "-I", cmd[0]] if cmd[0].endswith(".py") else ["bash", cmd[0]]
+        # shutil.which follows PATH; on Windows a bare "bash" would start
+        # System32's WSL launcher instead of Git Bash.
+        return [sys.executable, "-I", cmd[0]] if cmd[0].endswith(".py") else [shutil.which("bash") or "bash", cmd[0]]
     return cmd or None
 
 

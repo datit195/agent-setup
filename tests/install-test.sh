@@ -36,10 +36,13 @@ snapshot() {
 
 # User values that the installer must keep, and an old-style Claude hook entry
 # that it must replace (not duplicate).
-mkdir -p "$HOME/.codex" "$HOME/.cursor" "$HOME/.gemini/antigravity-cli" "$HOME/.claude"
+# Keep XDG paths inside the sandbox (the Cursor CLI config honours it on Linux).
+export XDG_CONFIG_HOME="$HOME/.xdg-config"
+if [ "$os" = linux ]; then cursor_cfg="$XDG_CONFIG_HOME/cursor/cli-config.json"; else cursor_cfg="$HOME/.cursor/cli-config.json"; fi
+mkdir -p "$HOME/.codex" "$(dirname "$cursor_cfg")" "$HOME/.gemini/antigravity-cli" "$HOME/.claude"
 printf '# mine\nmodel = "o3"\nsandbox_mode = "read-only"\n\n[mcp_servers.codegraph]\ncommand = "my-codegraph"\n' >"$HOME/.codex/config.toml"
 printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo user-hook"}]}]}}' >"$HOME/.codex/hooks.json"
-printf '%s\n' '{"approvalMode":"allowlist","permissions":{"allow":["Shell(ls)"]}}' >"$HOME/.cursor/cli-config.json"
+printf '%s\n' '{"approvalMode":"allowlist","permissions":{"allow":["Shell(ls)"]}}' >"$cursor_cfg"
 printf '%s\n' '{"agentMode":"manual","theme":"mine"}' >"$HOME/.gemini/antigravity-cli/settings.json"
 chmod 600 "$HOME/.gemini/antigravity-cli/settings.json"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/bin/python3 -I %s/.claude/hooks/english-only-warn.py"}]}]}}\n' "$HOME_NATIVE" >"$HOME/.claude/settings.json"
@@ -132,8 +135,6 @@ fi
 
 jq -e '(.hooks.Stop | length) == 1 and (.hooks.PreToolUse | length) == 2 and (.hooks.UserPromptSubmit | length) == 1
   and (.hooks.PreToolUse[0].matcher == "^apply_patch$")' "$HOME/.codex/hooks.json" >/dev/null || fail "codex hooks.json"
-cursor_cfg="$HOME/.cursor/cli-config.json"
-[ "$os" != linux ] || [ -z "${XDG_CONFIG_HOME:-}" ] || cursor_cfg="$XDG_CONFIG_HOME/cursor/cli-config.json"
 jq -e '.approvalMode == "allowlist" and .permissions.allow == ["Shell(ls)", "Mcp(codegraph:*)"]' "$cursor_cfg" >/dev/null || fail "cursor cli-config.json"
 ag="$HOME/.gemini/antigravity-cli/settings.json"
 jq -e '.agentMode == "manual" and .theme == "mine" and .permissions.allow == ["mcp(codegraph/*)"]' "$ag" >/dev/null || fail "antigravity settings.json"
