@@ -32,14 +32,43 @@ backup_copy_once() {
 }
 
 _make_link() { mkdir -p "$(dirname "$2")" && ln -s "$1" "$2"; }
+_make_copy() { mkdir -p "$(dirname "$2")" && cp -R "$1" "$2" && rm -rf "$2/.git"; }
 
-# link SRC DEST: make DEST a symlink to SRC, backing up whatever was there.
+# link (default) or copy: set by setup_link_mode.
+LINK_MODE=link
+
+# On Windows, use native symlinks when the user may create them (Developer
+# Mode or admin); otherwise copy files. AGENT_SETUP_LINK_MODE=copy forces copy
+# mode (tests).
+setup_link_mode() {
+  if [ "${AGENT_SETUP_LINK_MODE:-}" = copy ]; then
+    LINK_MODE=copy
+  elif [ "$OS" = windows ]; then
+    export MSYS=winsymlinks:nativestrict
+    : >"$TMP_DIR/link-test-src"
+    if ! ln -s "$TMP_DIR/link-test-src" "$TMP_DIR/link-test" 2>/dev/null || [ ! -L "$TMP_DIR/link-test" ]; then
+      LINK_MODE=copy
+    fi
+  fi
+  if [ "$LINK_MODE" = copy ]; then
+    warn "symlinks are not available (on Windows: turn on Developer Mode); files are copied instead, so re-run install.sh after editing the repo"
+  fi
+}
+
+# link SRC DEST: make DEST a symlink to SRC (in copy mode: a copy of SRC),
+# backing up whatever was there.
 link() {
   local src=$1 dest=$2
   in_list "$LINKED" "$dest" && return 0
   LINKED="$LINKED$dest"$'\n'
   if [ ! -e "$src" ] && [ "$DRY_RUN" != 1 ]; then
     warn "link source missing, skipped: $(pretty "$src")"
+    return 0
+  fi
+  if [ "$LINK_MODE" = copy ]; then
+    if [ -e "$dest" ] && [ ! -L "$dest" ] && diff -rq -x .git "$src" "$dest" >/dev/null 2>&1; then return 0; fi
+    if [ -e "$dest" ] || [ -L "$dest" ]; then backup_move "$dest"; fi
+    act "copy $(pretty "$src") -> $(pretty "$dest")" _make_copy "$src" "$dest"
     return 0
   fi
   if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$src" ]; then return 0; fi

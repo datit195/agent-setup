@@ -11,7 +11,8 @@ _write_file() {
   fi
   tmp=$(mktemp "$file.XXXXXX") || return 1
   if [ -e "$file" ]; then
-    mode=$(stat -f %Lp "$file") && chmod "$mode" "$tmp"
+    # GNU stat first: BSD stat rejects -c without printing anything.
+    mode=$(stat -c %a "$file" 2>/dev/null || stat -f %Lp "$file") && chmod "$mode" "$tmp"
   else
     chmod 644 "$tmp"
   fi

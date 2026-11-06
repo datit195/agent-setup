@@ -37,6 +37,20 @@ act() {
 
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+# Print the OS: macos, linux, wsl, windows (Git Bash / MSYS2 / Cygwin) or unknown.
+detect_os() {
+  case $(uname -s) in
+    Darwin) printf macos ;;
+    Linux) if grep -qi microsoft /proc/version 2>/dev/null; then printf wsl; else printf linux; fi ;;
+    MINGW* | MSYS* | CYGWIN*) printf windows ;;
+    *) printf unknown ;;
+  esac
+}
+OS=$(detect_os)
+
+# A path in the form Windows programs accept (C:/Users/x); unchanged elsewhere.
+native_path() { if [ "$OS" = windows ]; then cygpath -m "$1"; else printf '%s' "$1"; fi; }
+
 # in_list LIST ITEM: is ITEM a line of the newline-separated LIST?
 in_list() { case $1 in *$'\n'"$2"$'\n'*) return 0 ;; esac; return 1; }
 
