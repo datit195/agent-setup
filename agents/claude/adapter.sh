@@ -69,7 +69,7 @@ claude_plugins_dir() { printf '%s/plugins' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
 # The commit recorded for the user-scope install of plugin ID, or "".
 claude_installed_sha() {
   jq -r --arg id "$1" '[.plugins[$id][]? | select(.scope == "user") | .gitCommitSha // empty][0] // empty' \
-    "$(claude_plugins_dir)/installed_plugins.json" 2>/dev/null || true
+    "$(claude_plugins_dir)/installed_plugins.json" 2>/dev/null | tr -d '\r' || true
 }
 
 # claude_catalog MARKET NAME REPO SHA: write build/claude-marketplaces/MARKET/,
@@ -207,7 +207,7 @@ claude_plugin_skills() {
   local id path d flag ids
   ids=$'\n'$(lock_lines "$ROOT/agents/claude/plugins.lock" | cut -f1)$'\n'
   jq -r '.plugins | to_entries[] | .key as $id | .value[] | select(.scope == "user") | "\($id)\t\(.installPath)"' \
-    "$(claude_plugins_dir)/installed_plugins.json" 2>/dev/null |
+    "$(claude_plugins_dir)/installed_plugins.json" 2>/dev/null | tr -d '\r' |
     while IFS=$'\t' read -r id path; do
       if in_list "$ids" "$id"; then flag=1p; else flag=0p; fi
       for d in "$path"/skills/*/; do
