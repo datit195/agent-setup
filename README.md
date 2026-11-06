@@ -106,8 +106,8 @@ gh repo clone datit195/agent-setup ~/.agent-setup
 |---|---|
 | `--dry-run` | Print every action, change nothing |
 | `--agents claude,codex` | Only these agents. By default every detected agent is configured; a selected agent is configured even when it is not detected |
-| `--update` | Move the pins to the latest upstream versions, then install (see [Updating](#updating)) |
-| `--fix-duplicates` | Switch plugins installed from another marketplace to the locked one; move unmanaged duplicate skills to the backups |
+| `--update` | Same as a plain run, kept for compatibility: every run already updates (see [Updating](#updating)) |
+| `--fix-duplicates` | Switch plugins installed from another marketplace or source to the one in `core/plugins.lock`; move unmanaged duplicate skills to the backups |
 | `--skip-tools` | Skip the package manager step (Homebrew, apt-get/dnf/pacman or winget) and `tools/tools.lock` |
 | `--yes` | Install missing tools without asking |
 | `-h`, `--help` | Show help |
@@ -127,22 +127,21 @@ claude mcp list             # codegraph and playwright should be listed
 
 ### Updating
 
-Every third-party skill and Claude Code plugin is pinned to a reviewed commit (`core/skills.lock`, `agents/claude/plugins.lock`), so every machine and every agent runs the same version. To pick up the pinned versions on a machine:
+Nothing is pinned: every third-party skill, plugin, MCP server and tool follows its upstream source. `core/skills.lock` and `core/plugins.lock` only say where each one comes from.
+
+- **Plugins update natively where the agent supports it.** Claude Code installs the plugins from their authors' marketplaces with auto-update turned on, and Codex refreshes its plugin marketplaces at startup. Both pick up new versions by themselves.
+- **Everything else is refreshed when you run `install.sh`:** each run fetches the latest of every vendored skill and runs the agents' own plugin update commands. There is no background or scheduled job.
 
 ```sh
 git -C ~/.agent-setup pull && ~/.agent-setup/install.sh
 ```
 
-To move the pins to the latest upstream versions, run once, on one machine:
+> [!WARNING]
+> Third-party code now updates without review: a new commit of a skill or plugin reaches your agents on the next auto-update or `install.sh` run. Only keep sources you trust in the lock files.
 
-```sh
-~/.agent-setup/install.sh --update --dry-run   # show old -> new per entry, with compare links
-~/.agent-setup/install.sh --update             # rewrite the locks, then install
-```
+Per-agent details and sources: [plugins per agent](docs/reference.md#plugins-per-agent).
 
-`--update` never commits: review with `git diff`, commit and push, then run the first command on the other machines.
-
-**Duplicates.** The installer warns when a plugin is already installed from another marketplace (it does not install a second copy), or when a skill is in more than one folder an agent reads. `install.sh --fix-duplicates` switches such plugins to the locked source and moves unmanaged duplicate skill folders to the backups.
+**Duplicates.** The installer never gives an agent the same skill twice: an agent that has a plugin natively does not get its vendored copy. It warns when a plugin is already installed from another marketplace (it does not install a second copy), or when a skill is in more than one folder an agent reads. `install.sh --fix-duplicates` switches such plugins to the source in `core/plugins.lock` and moves unmanaged duplicate skill folders to the backups.
 
 ## What you get
 
@@ -169,7 +168,7 @@ Every agent gets `core/AGENTS.md` plus every rule in `core/rules/` (combined int
 
 ### Third-party skills
 
-Pinned to a reviewed commit in `core/skills.lock` and fetched into `vendor/`. Nothing runs at install time.
+Listed in `core/skills.lock`; each run fetches the latest of each repo into `vendor/`. Nothing runs at install time.
 
 | Skill | Source | What it is for |
 |---|---|---|
@@ -181,23 +180,23 @@ Pinned to a reviewed commit in `core/skills.lock` and fetched into `vendor/`. No
 | superpowers (15 skills) | `obra/superpowers` | Brainstorming, plans, TDD, debugging, code review, subagent-driven development, worktrees |
 | `harness`, `evolve` | `revfactory/harness` | Design an agent team (harness) for a project and evolve it from feedback |
 
-### Claude Code plugins
+### Plugins
 
-Claude Code gets these as plugins (`agents/claude/plugins.lock`), installed under the id each author recommends and pinned to the same commit as the skill copies above, which every other agent gets.
+The last four sources above are also plugins (`core/plugins.lock`). Each agent that can install a plugin natively gets it that way, under the id its author recommends; the other agents get the vendored skills.
 
-| Plugin | Installed as | Pinned by |
-|---|---|---|
-| `superpowers` | `superpowers@claude-plugins-official` (Anthropic's official marketplace) | the official marketplace; the installer warns when it differs from the lock |
-| `taste-skill` | `taste-skill@taste-skill` | the installer (exact commit) |
-| `gsap-skills` | `gsap-skills@gsap-skills` | the installer (exact commit) |
-| `harness` | `harness@harness-marketplace` | the installer (exact commit) |
+| Plugin | Claude Code | Codex | Antigravity | Cursor and the rest |
+|---|---|---|---|---|
+| `superpowers` | `superpowers@claude-plugins-official`, auto-updates | `superpowers@openai-curated`, auto-updates | `agy plugin install`, refreshed by `install.sh` | vendored skills |
+| `taste-skill` | `taste-skill@taste-skill`, auto-update on | `taste-skill@taste-skill`, auto-updates | vendored skills | vendored skills |
+| `gsap-skills` | `gsap-skills@gsap-skills`, auto-update on | `gsap-skills@gsap-skills`, auto-updates | vendored skills | vendored skills |
+| `harness` | `harness@harness-marketplace`, auto-update on | `harness@harness-marketplace`, auto-updates | vendored skills | vendored skills |
 
 ### MCP servers
 
 | Server | What it is | Approval |
 |---|---|---|
 | `codegraph` | [CodeGraph](https://github.com/colbymchenry/codegraph) code intelligence (`codegraph serve --mcp`); index a project with `codegraph init` | Auto-approved |
-| `playwright` | [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), pinned to `@playwright/mcp@0.0.83` | Asks as usual |
+| `playwright` | [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), `@playwright/mcp@latest` | Asks as usual |
 
 ### Hooks
 
@@ -219,9 +218,9 @@ Hooks fail open: a missing or broken script never blocks.
 
 | Tool | Installed with |
 |---|---|
-| `gh`, `jq`, `uv`, `node` | Homebrew on macOS; Homebrew, apt-get, dnf or pacman on Linux; winget on Windows |
-| `codegraph` | Its official installer, pinned to v1.6.2 |
-| `agent-reach` | `uv tool install`, pinned to v1.6.1, then `agent-reach setup` |
+| `gh`, `jq`, `uv`, `node` | Homebrew on macOS; Homebrew, apt-get, dnf or pacman on Linux; winget on Windows (installed when missing, never upgraded) |
+| `codegraph` | Its official installer, latest release (when missing) |
+| `agent-reach` | `uv tool install` of its latest release, then `agent-reach setup` (when missing) |
 
 ## Supported agents
 
@@ -230,7 +229,7 @@ Hooks fail open: a missing or broken script never blocks.
 | | Claude Code | Codex | Cursor | Antigravity |
 |---|:---:|:---:|:---:|:---:|
 | Rules | ✔ | ✔ | partial: paste into User Rules | ✔ |
-| Skills | ✔ (+ plugins) | ✔ | ✔ | ✔ |
+| Skills | ✔ (+ plugins) | ✔ (+ plugins) | ✔ | ✔ (+ plugins) |
 | MCP servers + auto-approval | ✔ | ✔ | ✔ | ✔ |
 | Hooks | ✔ | ✔ (trust once with `/hooks`) | partial: imported from Claude Code, cannot add context | ✔ (through a shim) |
 | Permissions / auto mode | ✔ | ✔ | partial: CLI only | partial: CLI only |
@@ -254,7 +253,8 @@ Gemini CLI, GitHub Copilot, opencode, Devin, Amp, Kiro, Cline, Factory Droid, Ze
 ```
 ~/.agent-setup
   core/AGENTS.md + core/rules/     shared instructions
-  core/skills/ + skills.lock       own and pinned third-party skills
+  core/skills/ + skills.lock       own and third-party skills
+  core/plugins.lock                plugins installed natively per agent
   core/mcp.json                    MCP servers
   core/hooks.json + core/hooks/    hooks
   shell/env.sh, tools/, git.conf   env, CLI tools, git identity
@@ -267,8 +267,8 @@ Gemini CLI, GitHub Copilot, opencode, Devin, Amp, Kiro, Cline, Factory Droid, Ze
 
 1. **Tools:** installs missing CLI tools (asks first unless `--yes`).
 2. **Git identity and shell env:** sets the git identity if unset and makes your shell source `shell/env.sh`.
-3. **Build:** combines the rules into `build/AGENTS.full.md` and fetches the pinned skills into `vendor/`.
-4. **Agents:** each agent's adapter links the rules and skills, adds the MCP servers, renders the hooks into the agent's format and merges its settings.
+3. **Build:** combines the rules into `build/AGENTS.full.md` and fetches the latest third-party skills into `vendor/`.
+4. **Agents:** each agent's adapter installs and updates its native plugins, links the rules and skills, adds the MCP servers, renders the hooks into the agent's format and merges its settings.
 
 ## Not included
 
@@ -283,7 +283,7 @@ Gemini CLI, GitHub Copilot, opencode, Devin, Amp, Kiro, Cline, Factory Droid, Ze
 - The Cursor and Antigravity apps get no env and keep permissions in their UI; only their CLIs are configured.
 - The Codex, Cursor and Antigravity setups are checked by the install test, not yet against real installs.
 - Some Windows config paths and the `codegraph` launcher on Windows are not verified.
-- `superpowers` follows Anthropic's official marketplace, which updates on its own; the installer warns when it moves away from the lock.
+- Cursor installs plugins only from its UI, so it gets vendored skills; Antigravity installs plugins from GitHub only when the repo has an Antigravity manifest (only `superpowers` has one).
 
 Full list: [docs/reference.md#known-gaps](docs/reference.md#known-gaps).
 
@@ -307,4 +307,4 @@ Layout, per-agent paths, vendoring and overrides, hook generation, install inter
 
 ## License
 
-MIT — see [LICENSE](LICENSE). The vendored third-party skills and Claude Code plugins keep their own licenses.
+MIT — see [LICENSE](LICENSE). The vendored third-party skills and the plugins keep their own licenses.

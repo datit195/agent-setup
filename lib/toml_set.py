@@ -4,7 +4,9 @@ Usage: python3 -I toml_set.py FILE < SPEC_JSON
 
 SPEC_JSON is a list of {"table": [...], "key": "...", "value": <json>} items,
 optionally with "new_table": true (set only when the table does not exist
-yet). A key that is already set is never changed. Prints the resulting file
+yet). A key that is already set is never changed, except that a key whose line
+is exactly `key = <one of "old">` (a value an older agent-setup wrote) is
+replaced with the new value. Prints the resulting file
 on stdout (unchanged when nothing is missing); the caller writes it.
 
 Python 3.9+ without third-party modules: a line scanner finds tables and keys;
@@ -121,9 +123,21 @@ def main():
     def exists(p):
         return p in keys or p in tables or (data is not None and parsed_has(data, p))
 
+    for item in spec:
+        table, key = tuple(item["table"]), item["key"]
+        if table not in headers or not item.get("old"):
+            continue
+        olds = ["%s = %s" % (fmt_key(key), fmt(o)) for o in item["old"]]
+        start, end = headers[table]
+        for i in range(start + 1, end):
+            if lines[i].strip() in olds:
+                lines[i] = "%s = %s" % (fmt_key(key), fmt(item["value"]))
+
     top, inserts, new_tables = [], {}, {}
     for item in spec:
         table, key = tuple(item["table"]), item["key"]
+        if item.get("old"):
+            continue
         if item.get("new_table") and table and exists(table):
             continue
         full = table + (key,)

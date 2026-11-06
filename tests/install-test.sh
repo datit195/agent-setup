@@ -23,10 +23,13 @@ echo "OS: $os  sandbox HOME: $HOME"
 mkdir -p "$HOME/.agent-setup"
 (cd "$repo" && tar -cf - --exclude=./build --exclude=./vendor .) | (cd "$HOME/.agent-setup" && tar -xf -)
 
-# A stub claude CLI on PATH, so the MCP and plugin steps run (tests/claude-stub.sh).
+# Stub claude, codex and agy CLIs on PATH, so the MCP and native plugin steps
+# run (tests/*-stub.sh).
 mkdir -p "$HOME/stub-bin"
-cp "$repo/tests/claude-stub.sh" "$HOME/stub-bin/claude"
-chmod +x "$HOME/stub-bin/claude"
+for c in claude codex agy; do
+  cp "$repo/tests/$c-stub.sh" "$HOME/stub-bin/$c"
+  chmod +x "$HOME/stub-bin/$c"
+done
 export PATH="$HOME/stub-bin:$PATH"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -53,11 +56,32 @@ printf '%s\n' '{"agentMode":"manual","theme":"mine"}' >"$HOME/.gemini/antigravit
 chmod 600 "$HOME/.gemini/antigravity-cli/settings.json"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/bin/python3 -I %s/.claude/hooks/english-only-warn.py"}]}]}}\n' "$HOME_NATIVE" >"$HOME/.claude/settings.json"
 
+# What an earlier, pinning agent-setup left behind, to be migrated: playwright
+# pinned to 0.0.83 in Claude Code, Codex and Cursor; harness installed from a
+# local pinned catalog in build/claude-marketplaces/ (with plugin data); and a
+# skill link into an old vendor/<repo>@<sha> dir.
+old_pw='["-y","@playwright/mcp@0.0.83"]'
+printf '{"mcpServers":{"playwright":{"type":"stdio","command":"npx","args":%s,"env":{}}}}\n' "$old_pw" >"$HOME/.claude.json"
+printf '\n[mcp_servers.playwright]\ncommand = "npx"\nargs = ["-y", "@playwright/mcp@0.0.83"]\n' >>"$HOME/.codex/config.toml"
+mkdir -p "$HOME/.cursor"
+printf '{"mcpServers":{"playwright":{"type":"stdio","command":"npx","args":%s,"env":{}}}}\n' "$old_pw" >"$HOME/.cursor/mcp.json"
+catalog="$HOME/.agent-setup/build/claude-marketplaces/harness-marketplace"
+mkdir -p "$catalog/.claude-plugin"
+printf '%s\n' '{"name":"harness-marketplace","plugins":[{"name":"harness","version":"1.0.0","source":{"source":"github","repo":"revfactory/harness","sha":"92d9f1b29e7af81acebf51a9fcd1832e739a1414"}}]}' >"$catalog/.claude-plugin/marketplace.json"
+claude plugin marketplace add "$catalog" >/dev/null
+claude plugin install harness@harness-marketplace >/dev/null
+mkdir -p "$HOME/.claude/plugins/data/harness-harness-marketplace" && echo mine >"$HOME/.claude/plugins/data/harness-harness-marketplace/keep"
+oldvendor="$HOME/.agent-setup/vendor/wheresryan22__anatomy@1482e8469b0a9e0d8cc18ea2740a01423d29ae80"
+mkdir -p "$oldvendor" "$HOME/.agents/skills" && printf -- '---\nname: anatomy\n---\n' >"$oldvendor/SKILL.md"
+ln -s "$oldvendor" "$HOME/.agents/skills/anatomy"
+rm -f "$HOME/.claude-stub.log"
+
 echo "== dry run on a fresh HOME"
 before=$(snapshot)
 run --dry-run --skip-tools "$@"
 after=$(snapshot)
 [ "$before" = "$after" ] || { diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true; fail "--dry-run changed files on a fresh HOME"; }
+grep -q 'fetch the latest wheresryan22/anatomy' "$out" || fail "dry run does not say it fetches the latest skills"
 pass "dry run on a fresh HOME changed nothing"
 
 echo "== first run"
@@ -80,14 +104,25 @@ pass "dry run after install: 0 changes, nothing changed"
 echo "== results"
 for f in .claude/CLAUDE.md .claude/rules/language.md .claude/rules/claude-extras.md .claude/rules/coordinator-mode.md \
   .claude/hooks/issue-branch-guard.sh .claude/hooks/english-only-warn.py .claude/skills/anatomy/SKILL.md \
-  .agents/skills/anatomy/SKILL.md .agents/skills/impeccable/SKILL.md .agents/skills/taste-skill/SKILL.md \
-  .agents/skills/gsap-core/SKILL.md .agents/skills/brainstorming/SKILL.md .agents/skills/harness/SKILL.md \
-  .gemini/config/skills/evolve/SKILL.md .codex/AGENTS.md .gemini/GEMINI.md .config/opencode/AGENTS.md; do
+  .agents/skills/anatomy/SKILL.md .agents/skills/impeccable/SKILL.md .agents/skills/brainstorming/SKILL.md \
+  .gemini/config/skills/evolve/SKILL.md .gemini/config/skills/gsap-core/SKILL.md .kiro/skills/brainstorming/SKILL.md \
+  .kiro/skills/taste-skill/SKILL.md .codex/AGENTS.md .gemini/GEMINI.md .config/opencode/AGENTS.md; do
   [ -f "$HOME/$f" ] || fail "missing ~/$f"
 done
-for f in .claude/skills/taste-skill .claude/skills/brainstorming .claude/skills/harness; do
-  [ ! -e "$HOME/$f" ] || fail "~/$f exists; Claude gets plugin skills from its plugins"
+# No agent gets a skill twice: not from its native plugin and a vendored copy.
+for f in .claude/skills/taste-skill .claude/skills/brainstorming .claude/skills/harness \
+  .agents/skills/taste-skill .agents/skills/gsap-core .agents/skills/harness .agents/skills/evolve \
+  .gemini/config/skills/brainstorming; do
+  [ ! -e "$HOME/$f" ] && [ ! -L "$HOME/$f" ] || fail "~/$f exists; that agent has the plugin natively"
 done
+if [ -L "$HOME/.agents/skills/anatomy" ]; then
+  case $(readlink "$HOME/.agents/skills/anatomy") in */vendor/wheresryan22__anatomy) ;; *) fail "anatomy link not moved to the per-repo vendor dir" ;; esac
+fi
+[ ! -e "$oldvendor" ] || fail "the old pinned vendor dir was not removed"
+for d in "$HOME"/.agent-setup/vendor/*; do
+  case $(basename "$d") in *@*) fail "old pinned vendor dir left: $d" ;; esac
+done
+pass "skills: per-repo vendor dirs, old pinned dirs removed, no skill twice per agent"
 grep -q 'allow_implicit_invocation: false' "$HOME/.agents/skills/impeccable/agents/openai.yaml" || fail "impeccable is not explicit-only for Codex"
 grep -q '^@~/.agent-setup/core/AGENTS.md' "$HOME/.claude/CLAUDE.md" || fail "~/.claude/CLAUDE.md is not the import stub"
 size=$(wc -c <"$HOME/.agent-setup/build/AGENTS.full.md" | tr -d ' ')
@@ -130,7 +165,7 @@ assert c["shell_environment_policy"]["set"]["IMPECCABLE_NO_TELEMETRY"] == "1"
 cg = c["mcp_servers"]["codegraph"]
 assert cg["command"] == "my-codegraph" and "args" not in cg, "user MCP server changed"
 assert cg["default_tools_approval_mode"] == "auto"
-assert c["mcp_servers"]["playwright"]["args"] == ["-y", "@playwright/mcp@0.0.83"]
+assert c["mcp_servers"]["playwright"]["args"] == ["-y", "@playwright/mcp@latest"], "old playwright pin not migrated"
 assert "default_tools_approval_mode" not in c["mcp_servers"]["playwright"]
 EOF
   pass "codex config.toml parses (tomllib via $toml_py), user values kept, keys added"
@@ -227,77 +262,88 @@ mv "$HOME/.agent-setup/core/hooks.off" "$HOME/.agent-setup/core/hooks"
 mv "$HOME/.claude/hooks.off" "$HOME/.claude/hooks"
 pass "hook commands exit 0 when their scripts are missing"
 
-echo "== locks and Claude plugins (stub claude CLI)"
-lockdir="$HOME/.agent-setup"
-plock="$lockdir/agents/claude/plugins.lock"
-slock="$lockdir/core/skills.lock"
+echo "== native plugins (stub claude, codex and agy CLIs)"
 inst="$HOME/.claude/plugins/installed_plugins.json"
 known="$HOME/.claude/plugins/known_marketplaces.json"
 stublog="$HOME/.claude-stub.log"
-locked() { awk -F '\t' -v i="$1" '$1 == i { print $3 }' "$plock"; }
-isha() { jq -r --arg i "$1" '.plugins[$i][0].gitCommitSha // empty' "$inst"; }
-setsha() { jq --arg i "$1" --arg s "$2" '.plugins[$i][0].gitCommitSha = $s' "$inst" >"$inst.tmp" && mv "$inst.tmp" "$inst"; }
-grep -q 'skills.lock: .* pinned to' "$out" && fail "the locks in the repo disagree"
-grep -v '^#' "$plock" | while IFS=$'\t' read -r id _ sha _ how; do
-  [ "$(isha "$id")" = "$sha" ] || fail "$id is not installed at its locked commit $sha"
-  if [ "$how" = pinned ]; then
-    m=${id#*@}
-    jq -e --arg m "$m" '.[$m].source.source == "directory"' "$known" >/dev/null || fail "marketplace $m is not the pinned catalog"
-    jq -e --arg s "$sha" '.plugins[0].source.sha == $s' "$lockdir/build/claude-marketplaces/$m/.claude-plugin/marketplace.json" >/dev/null ||
-      fail "catalog $m is not pinned to $sha"
-  fi
+plock="$HOME/.agent-setup/core/plugins.lock"
+grep -Eq '[0-9a-f]{40}' "$plock" "$HOME/.agent-setup/core/skills.lock" && fail "a lock file still pins a commit"
+for id in superpowers@claude-plugins-official taste-skill@taste-skill gsap-skills@gsap-skills harness@harness-marketplace; do
+  jq -e --arg i "$id" '.plugins | has($i)' "$inst" >/dev/null || fail "claude: $id not installed"
 done
-jq -e '.plugins[0] | .version == "2.5.0" and .skills == ["./skills/taste-skill"] and .source.source == "github"' \
-  "$lockdir/build/claude-marketplaces/taste-skill/.claude-plugin/marketplace.json" >/dev/null || fail "taste-skill catalog does not keep the author's entry"
-pass "every plugin installed at its locked commit; pinned catalogs keep the author's entry"
+for m in taste-skill:Leonxlnx/taste-skill gsap-skills:greensock/gsap-skills harness-marketplace:revfactory/harness; do
+  jq -e --arg m "${m%%:*}" --arg r "${m#*:}" '.[$m].source == {source: "github", repo: $r}' "$known" >/dev/null || fail "claude: marketplace ${m%%:*} is not from GitHub ${m#*:}"
+  jq -e --arg m "${m%%:*}" '.extraKnownMarketplaces[$m].autoUpdate == true' "$settings" >/dev/null || fail "claude: auto-update is not on for ${m%%:*}"
+done
+jq -e '.extraKnownMarketplaces["claude-plugins-official"] | not' "$settings" >/dev/null || fail "claude: the official marketplace got a settings entry"
+[ "$(claude plugin marketplace list --json | jq length)" = 4 ] || fail "claude: not exactly 4 marketplaces"
+grep -q 'plugin install harness' "$stublog" && fail "claude: harness was reinstalled instead of re-pointed"
+[ "$(cat "$HOME/.claude/plugins/data/harness-harness-marketplace/keep")" = mine ] || fail "claude: harness plugin data lost"
+[ ! -e "$HOME/.agent-setup/build/claude-marketplaces" ] || fail "build/claude-marketplaces was not removed"
+jq -e '.mcpServers.playwright.args == ["-y", "@playwright/mcp@latest"]' "$HOME/.claude.json" >/dev/null || fail "claude: old playwright pin not migrated"
+jq -e '.mcpServers.playwright.args == ["-y", "@playwright/mcp@latest"]' "$HOME/.cursor/mcp.json" >/dev/null || fail "cursor: old playwright pin not migrated"
+pass "claude: authors' GitHub marketplaces with auto-update, pinned catalog migrated in place (data kept), playwright follows latest"
+cstate="$HOME/.codex/stub-state.json"
+jq -e '.plugins | keys == ["gsap-skills@gsap-skills", "harness@harness-marketplace", "taste-skill@taste-skill"]' "$cstate" >/dev/null || fail "codex: native plugins: $(cat "$cstate")"
+jq -e '.marketplaces | keys == ["gsap-skills", "harness-marketplace", "taste-skill"]' "$cstate" >/dev/null || fail "codex: marketplaces"
+grep -q 'NOTE: codex: superpowers@openai-curated is not available yet' "$out" || fail "codex: no note about openai-curated"
+jq -e '.superpowers.source == "https://github.com/obra/superpowers"' "$HOME/.gemini/stub-plugins.json" >/dev/null || fail "antigravity: superpowers not installed from GitHub"
+pass "codex: taste-skill, gsap-skills, harness native (superpowers vendored until openai-curated has it); antigravity: superpowers native"
 
-# A skip=claude copy on another commit than its plugin is reported.
-cp "$slock" "$HOME/skills.lock.orig"
-awk -F '\t' -v OFS='\t' '$1 == "brainstorming" { $3 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" } { print }' "$HOME/skills.lock.orig" >"$slock"
-run --dry-run --skip-tools "$@"
-grep -q "skills.lock: brainstorming is at aaaaaaaaaaaa but plugin superpowers@claude-plugins-official is pinned to" "$out" || fail "lock mismatch not reported"
-cp "$HOME/skills.lock.orig" "$slock"
-pass "a skip=claude copy on another commit than its plugin is reported"
-
-# Pinned plugin on another commit: reinstalled at the lock. Official plugin on
-# another commit while its marketplace offers the lock: reinstalled too.
-setsha gsap-skills@gsap-skills 0000000000000000000000000000000000000000
-setsha superpowers@claude-plugins-official bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
-: >"$stublog"
+echo "== upstream moves (STUB_VERSION=2.0.0)"
+export STUB_VERSION=2.0.0
 run --yes --skip-tools "$@"
-grep -q '^plugin uninstall --keep-data gsap-skills@gsap-skills' "$stublog" || fail "gsap-skills was not reinstalled"
-[ "$(isha gsap-skills@gsap-skills)" = "$(locked gsap-skills@gsap-skills)" ] || fail "gsap-skills is not back at the lock"
-[ "$(isha superpowers@claude-plugins-official)" = "$(locked superpowers@claude-plugins-official)" ] ||
-  { claude plugin marketplace list --json; ls -laR "$HOME/.claude/plugins/marketplaces"; fail "superpowers is not back at the lock"; }
-pass "plugins on another commit are reinstalled at the locked commit"
-
-# The official marketplace offers another commit than the lock: warn only.
-off="$HOME/.claude/plugins/marketplaces/claude-plugins-official/.claude-plugin/marketplace.json"
-cp "$off" "$HOME/official.orig"
-jq '.plugins[0].source.sha = "cccccccccccccccccccccccccccccccccccccccc"' "$HOME/official.orig" >"$off"
-setsha superpowers@claude-plugins-official cccccccccccccccccccccccccccccccccccccccc
+for id in superpowers@claude-plugins-official taste-skill@taste-skill gsap-skills@gsap-skills harness@harness-marketplace; do
+  grep -q "^claude: updated plugin $id: 1.0.0 -> 2.0.0" "$out" || fail "claude: $id not updated"
+done
+grep -q '^codex: plugins updated' "$out" || fail "codex: plugins not upgraded"
+grep -q '^antigravity: updated plugin superpowers: 1.0.0 -> 2.0.0' "$out" || fail "antigravity: superpowers not reinstalled"
 run --yes --skip-tools "$@"
-grep -q "superpowers@claude-plugins-official is installed at cccccccccccc, plugins.lock pins" "$out" || fail "official drift not reported"
-cp "$HOME/official.orig" "$off"
-run --yes --skip-tools "$@"
-pass "official plugin on another commit than the lock: warned, then reinstalled once the marketplace offers the lock"
+grep -q '^0 change(s) made' "$out" || fail "run after the update made changes"
+pass "every run updates the native plugins; a run without upstream changes reports 0"
 
+echo "== openai-curated syncs superpowers"
+export STUB_CODEX_CURATED=1
+run --yes --skip-tools "$@"
+jq -e '.plugins | has("superpowers@openai-curated")' "$cstate" >/dev/null || fail "codex: superpowers not installed once openai-curated has it"
+[ ! -e "$HOME/.agents/skills/brainstorming" ] && [ ! -L "$HOME/.agents/skills/brainstorming" ] || fail "codex: vendored superpowers left in ~/.agents/skills"
+[ -f "$HOME/.kiro/skills/brainstorming/SKILL.md" ] || fail "kiro lost the vendored superpowers"
+run --yes --skip-tools "$@"
+grep -q '^0 change(s) made' "$out" || fail "run after the openai-curated install made changes"
+pass "codex: superpowers native once available; its vendored copies leave the shared dir"
+
+echo "== a fetch fails"
+vend="$HOME/.agent-setup/vendor/wheresryan22__anatomy"
+url=$(git -C "$vend" remote get-url origin)
+git -C "$vend" remote set-url origin "$HOME/no-such-repo"
+run --yes --skip-tools "$@"
+grep -q 'WARN: could not fetch wheresryan22/anatomy; kept the last good copy' "$out" || fail "no warning for a failed fetch"
+[ -f "$HOME/.agents/skills/anatomy/SKILL.md" ] || fail "anatomy link dangles after a failed fetch"
+git -C "$vend" remote set-url origin "$url"
+pass "a failed fetch keeps the last good copy"
+
+echo "== duplicates"
 # A second copy of a plugin from another marketplace: warn, no second install.
 jq '.["superpowers-dev"] = {source: {source: "github", repo: "obra/superpowers"}, installLocation: "/nonexistent"}' "$known" >"$known.tmp" && mv "$known.tmp" "$known"
 jq '.plugins["superpowers@superpowers-dev"] = [{scope: "user", installPath: "/nonexistent", version: "7.0.2", gitCommitSha: "22f0b463e7a5e579904dd6211a520321035526f7"}]
   | del(.plugins["superpowers@claude-plugins-official"])' "$inst" >"$inst.tmp" && mv "$inst.tmp" "$inst"
+jq '.plugins["gsap-skills@mine"] = "1.0.0" | del(.plugins["gsap-skills@gsap-skills"])' "$cstate" >"$cstate.tmp" && mv "$cstate.tmp" "$cstate"
 : >"$stublog"
 run --yes --skip-tools "$@"
 grep -q "WARN: claude: superpowers is already installed as superpowers@superpowers-dev, so superpowers@claude-plugins-official was not installed as a second copy. Switch with: claude plugin uninstall superpowers@superpowers-dev && claude plugin install superpowers@claude-plugins-official" "$out" ||
   fail "duplicate plugin not reported with the switch commands"
 grep -q 'plugin install superpowers@' "$stublog" && fail "a second copy of superpowers was installed"
-pass "plugin installed from another marketplace: warned with the switch commands, no second copy"
+grep -q "WARN: codex: gsap-skills is already installed as gsap-skills@mine" "$out" || fail "codex duplicate plugin not reported"
+jq -e '.plugins | has("gsap-skills@gsap-skills") | not' "$cstate" >/dev/null || fail "codex: a second copy of gsap-skills was installed"
+[ ! -e "$HOME/.agents/skills/gsap-core" ] || fail "codex has gsap-skills natively, but the vendored copy came back"
+pass "plugin installed from another marketplace: warned with the switch commands, no second copy (claude, codex)"
 run --yes --skip-tools --fix-duplicates "$@"
 grep -q '^plugin uninstall superpowers@superpowers-dev' "$stublog" || fail "--fix-duplicates did not uninstall the other copy"
 grep -q '^plugin marketplace remove superpowers-dev' "$stublog" || fail "--fix-duplicates did not remove the emptied marketplace"
 jq -e '.plugins | has("superpowers@claude-plugins-official") and (has("superpowers@superpowers-dev") | not)' "$inst" >/dev/null || fail "superpowers was not switched"
+jq -e '.plugins | has("gsap-skills@gsap-skills") and (has("gsap-skills@mine") | not)' "$cstate" >/dev/null || fail "codex: gsap-skills was not switched"
 ls "$HOME"/.agent-setup-backups/*/.claude/plugins/installed_plugins.json >/dev/null 2>&1 || fail "plugin records were not backed up"
-pass "--fix-duplicates switches the plugin to the locked marketplace (records backed up)"
+pass "--fix-duplicates switches the plugins to the core/plugins.lock source (records backed up)"
 
 # Duplicate skills: an unmanaged copy next to a managed one, for Codex (and
 # Cursor, which reads ~/.codex/skills) and Claude (next to a plugin skill).
@@ -318,16 +364,15 @@ pass "--fix-duplicates moves unmanaged duplicates to the backups"
 
 run --yes --skip-tools "$@"
 grep -q '^0 change(s) made' "$out" || fail "run after the plugin and skill fixes made changes"
-grep -q 'WARN: .*\(skill\|plugin\|skills.lock\)' "$out" && fail "warnings left after the fixes"
-pass "after the fixes: 0 changes, no plugin or skill warnings"
+grep -q 'WARN: .*\(skill\|plugin\|fetch\)' "$out" && fail "warnings left after the fixes"
+pass "after the fixes: 0 changes, no plugin, skill or fetch warnings"
 
-echo "== --update --dry-run"
+echo "== --update (kept as an alias) --dry-run"
 before=$(snapshot)
 run --update --dry-run --skip-tools "$@"
-grep -q '^== Update ==' "$out" && grep -q 'plugin superpowers@claude-plugins-official: ' "$out" && grep -q 'skills cloudai-x/threejs-skills' "$out" ||
-  fail "--update --dry-run printed no per-entry summary"
-grep -q 'Dry run: the lock files were not written' "$out" || fail "--update --dry-run printed no next steps"
+grep -q '^Dry run: 0 change(s) would be made' "$out" || fail "--update --dry-run would make changes"
+grep -q 'would fetch the latest cloudai-x/threejs-skills' "$out" || fail "--update --dry-run does not say it fetches the latest"
 [ "$before" = "$(snapshot)" ] || fail "--update --dry-run changed files"
-pass "--update --dry-run shows the changes and writes nothing"
+pass "--update is a plain run; with --dry-run it writes nothing"
 
 echo "ALL CHECKS PASSED ($os)"

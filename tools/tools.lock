@@ -1,5 +1,6 @@
-# CLI tools installed outside Homebrew. One per line, tab-separated: name, install command, check command,
-# and optionally the comma-separated OSes the line applies to (macos, linux, wsl, windows; default: all).
-agent-reach	uv tool install https://github.com/Panniantong/Agent-Reach/releases/download/v1.6.1/agent_reach-1.6.1-py3-none-any.whl && agent-reach setup	agent-reach version
-codegraph	curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/v1.6.2/install.sh | CODEGRAPH_VERSION=v1.6.2 sh	codegraph --version	macos,linux,wsl
-codegraph	powershell -NoProfile -ExecutionPolicy Bypass -Command "\$env:CODEGRAPH_VERSION='v1.6.2'; irm https://raw.githubusercontent.com/colbymchenry/codegraph/v1.6.2/install.ps1 | iex"	codegraph --version || codegraph.cmd --version	windows
+# CLI tools installed outside Homebrew, each at its latest release when missing (installed tools are not upgraded).
+# One per line, tab-separated: name, install command, check command, and optionally the comma-separated OSes the line
+# applies to (macos, linux, wsl, windows; default: all).
+agent-reach	tag=$(curl -fsSLI -o /dev/null -w '%{url_effective}' https://github.com/Panniantong/Agent-Reach/releases/latest) && tag=${tag##*/} && uv tool install "https://github.com/Panniantong/Agent-Reach/releases/download/$tag/agent_reach-${tag#v}-py3-none-any.whl" && agent-reach setup	agent-reach version
+codegraph	curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.sh | sh	codegraph --version	macos,linux,wsl
+codegraph	powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/colbymchenry/codegraph/main/install.ps1 | iex"	codegraph --version || codegraph.cmd --version	windows

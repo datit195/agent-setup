@@ -52,6 +52,8 @@ json_merge() {
 #   MCP_ARGS  bash array of args
 #   MCP_ENV   bash array of KEY=VALUE strings
 #   MCP_ENV_KEYS  comma-separated env keys (safe to print; values never are)
+#   MCP_OLD_ARGS  JSON array of the args older agent-setup versions wrote
+#                 ("oldArgs"); a server with exactly those args is replaced
 mcp_each() {
   local cb=$1 line name cmd args env a
   local file="$ROOT/core/mcp.json"
@@ -68,6 +70,7 @@ mcp_each() {
     MCP_ENV=()
     while IFS= read -r a; do MCP_ENV+=("$a"); done < <(jq -r 'to_entries[] | "\(.key)=\(.value)"' <<<"$env")
     MCP_ENV_KEYS=$(jq -r 'keys | join(",")' <<<"$env")
+    MCP_OLD_ARGS=$(jq -c '.value.oldArgs // []' <<<"$line")
     "$cb" "$name" "$cmd" "$args" "$env"
   done 3< <(jq -c '.servers // {} | to_entries[]' "$file")
 }
@@ -75,26 +78,30 @@ mcp_each() {
 # mcp_merge_file FILE JQ_PATH TEMPLATE: add every core/mcp.json server that is
 # missing under JQ_PATH (e.g. .mcpServers) in FILE. TEMPLATE is a jq expression
 # that may use $c (command), $a (args array) and $e (env object).
-# Existing entries are never overwritten.
+# Existing entries are never overwritten, except one that is exactly what an
+# older agent-setup wrote (TEMPLATE with one of the server's "oldArgs").
 mcp_merge_file() {
-  local file=$1 path=$2 tmpl=$3 missing
+  local file=$1 path=$2 tmpl=$3 todo
   [ -f "$ROOT/core/mcp.json" ] || return 0
+  # shellcheck disable=SC2016
+  local upd='($s.value.command as $c | ($s.value.env // {}) as $e
+      | (($s.value.args // []) as $a | '"$tmpl"') as $new
+      | [($s.value.oldArgs // [])[] as $a | '"$tmpl"'] as $old
+      | ((('"$path"') // {})[$s.key]) as $have
+      | if $have == null then $new elif any($old[]; . == $have) then $new else $have end)'
   if [ -e "$file" ] && [ -s "$file" ] && jq -e 'type == "object"' "$file" >/dev/null 2>&1; then
-    if ! missing=$(jq -r --slurpfile m "$ROOT/core/mcp.json" \
-      "(($path) // {}) as \$have | \$m[0].servers // {} | keys[] as \$k | select((\$have | has(\$k)) | not) | \$k" "$file" 2>&1); then
-      warn "$(pretty "$file"): cannot read $path ($missing); MCP servers not added"
+    if ! todo=$(jq -r --slurpfile m "$ROOT/core/mcp.json" \
+      ". as \$r | \$m[0].servers // {} | to_entries[] as \$s | \$r | select(((($path) // {})[\$s.key]) != $upd) | \$s.key" "$file" 2>&1); then
+      warn "$(pretty "$file"): cannot read $path ($todo); MCP servers not added"
       return 0
     fi
   else
-    missing=$(jq -r '.servers // {} | keys[]' "$ROOT/core/mcp.json")
+    todo=$(jq -r '.servers // {} | keys[]' "$ROOT/core/mcp.json")
   fi
-  [ -n "$missing" ] || return 0
-  log "MCP servers to add to $(pretty "$file"): $(printf '%s' "$missing" | tr '\n' ' ')"
+  [ -n "$todo" ] || return 0
+  log "MCP servers to add or update in $(pretty "$file"): $(printf '%s' "$todo" | tr '\n' ' ')"
   json_merge "$file" --slurpfile m "$ROOT/core/mcp.json" "
-    reduce ((\$m[0].servers // {}) | to_entries[]) as \$s (.;
-      if ((($path) // {}) | has(\$s.key)) then .
-      else ($path)[\$s.key] = (\$s.value.command as \$c | (\$s.value.args // []) as \$a | (\$s.value.env // {}) as \$e | $tmpl)
-      end)"
+    reduce ((\$m[0].servers // {}) | to_entries[]) as \$s (.; ($path)[\$s.key] = $upd)"
 }
 
 # mcp_listed NAME CMD...: run a list command; 0 = NAME appears in its output,

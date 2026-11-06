@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Build step: generate build/AGENTS.full.md, vendor pinned third-party skills
-# and apply skill description overrides.
+# Build step: generate build/AGENTS.full.md, fetch the latest third-party
+# skills and apply skill description overrides.
 
 AGENTS_MAX_BYTES=32768   # Codex project-doc limit
 
@@ -75,87 +75,158 @@ _apply_sparse() {
   fi
 }
 
-# _fetch_commit DIR URL SHA PATTERNS: shallow, blob-less fetch of one commit,
-# checking out only PATTERNS ("" = whole tree); git fetches just those blobs.
-_fetch_commit() {
-  local dir=$1 url=$2 sha=$3 want=$4
-  rm -rf "$dir" && mkdir -p "$dir" &&
-    git -C "$dir" init -q &&
-    git -C "$dir" remote add origin "$url" &&
-    git -C "$dir" config remote.origin.promisor true &&
-    git -C "$dir" config remote.origin.partialclonefilter blob:none &&
-    { [ -z "$want" ] || {
-      mkdir -p "$dir/.git/info" &&
-        git -C "$dir" config core.sparseCheckout true &&
-        printf '%s\n' "$want" >"$dir/.git/info/sparse-checkout"
-    }; } &&
-    git -C "$dir" fetch -q --depth 1 --filter=blob:none origin "$sha" &&
-    git -C "$dir" -c advice.detachedHead=false checkout -q FETCH_HEAD ||
-    { rm -rf "$dir"; return 1; }
-}
-
-# _sparse_patterns ENTRIES REPO SHA: sparse patterns for every lock path of
-# REPO@SHA, one per line; prints nothing when any path is "." (whole tree).
+# _sparse_patterns ENTRIES REPO: sparse patterns for every lock path of REPO,
+# one per line; prints nothing when any path is "." (whole tree).
 _sparse_patterns() {
-  printf '%s' "$1" | awk -F '\t' -v repo="$2" -v sha="$3" '
-    $2 == repo && $3 == sha { if ($4 == ".") full = 1; else if (!seen[$4]++) out = out "/" $4 "/\n" }
+  printf '%s' "$1" | awk -F '\t' -v repo="$2" '
+    $2 == repo { if ($3 == ".") full = 1; else if (!seen[$3]++) out = out "/" $3 "/\n" }
     END { if (!full) printf "%s", out }'
 }
 
-# _vendor_dir DIR REPO SHA PATTERNS: make DIR a checkout of REPO@SHA limited to
-# PATTERNS. Returns 1 when the checkout is missing after trying (act warned).
-_vendor_dir() {
-  local dir=$1 repo=$2 sha=$3 want=$4 base
-  base="vendor/$(basename "$dir")"
-  if [ -d "$dir/.git" ] && [ "$(git -C "$dir" rev-parse HEAD 2>/dev/null)" = "$sha" ]; then
-    [ "$(_sparse_state "$dir")" = "$want" ] && return 0
-    act "update checked-out paths of $base" _apply_sparse "$dir" "$want"
-    return 0
-  fi
-  act "fetch $repo@${sha:0:12} into vendor/" _fetch_commit "$dir" "https://github.com/$repo.git" "$sha" "$want"
-  [ "$DRY_RUN" = 1 ] || [ -d "$dir/.git" ]
+# _vendor_ref URL TRACK: the ref to fetch: HEAD (the default branch), or with
+# TRACK the highest version tag matching that glob.
+_vendor_ref() {
+  local tag
+  if [ -z "$2" ]; then printf HEAD; return 0; fi
+  tag=$(git ls-remote --tags --sort=-v:refname "$1" "refs/tags/$2" 2>/dev/null |
+    awk 'NR == 1 { r = $2; sub("^refs/tags/", "", r); sub(/\^\{\}$/, "", r); print r }')
+  [ -n "$tag" ] || return 1
+  printf 'refs/tags/%s' "$tag"
 }
 
-# For each core/skills.lock entry, make sure vendor/<owner>__<repo>@<sha>/ holds
-# that commit (only the paths the lock needs from it, plus .claude-plugin/ for
-# a Claude plugin's commit, read for its pinned catalog), and record
-# "name<TAB>skill dir<TAB>skip" in VENDORED_SKILLS.
-vendor_skills() {
-  local name repo sha path opts skip dir src want entries="" skips="" done_dirs=$'\n' ok_dirs=$'\n' plugins
-  plugins=$(lock_lines "$ROOT/agents/claude/plugins.lock" | cut -f2,3)
-  while IFS=$'\t' read -r name repo sha path opts; do
-    [ -n "$name" ] || continue
-    if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || [ -z "$repo" ]; then
-      warn "skills.lock: bad entry for '$name'; skipped"
-      continue
+# _fetch_new DIR URL REF PATTERNS: shallow, blob-less fetch of REF into a new
+# DIR, checking out only PATTERNS ("" = whole tree). Built next to DIR and moved
+# into place, so a failed fetch leaves nothing behind.
+_fetch_new() {
+  local dir=$1 url=$2 ref=$3 want=$4 tmp="$1.tmp"
+  rm -rf "$tmp" && mkdir -p "$tmp" &&
+    git -C "$tmp" init -q &&
+    git -C "$tmp" remote add origin "$url" &&
+    git -C "$tmp" config remote.origin.promisor true &&
+    git -C "$tmp" config remote.origin.partialclonefilter blob:none &&
+    { [ -z "$want" ] || {
+      mkdir -p "$tmp/.git/info" &&
+        git -C "$tmp" config core.sparseCheckout true &&
+        printf '%s\n' "$want" >"$tmp/.git/info/sparse-checkout"
+    }; } &&
+    git -C "$tmp" fetch -q --depth 1 --filter=blob:none origin "$ref" &&
+    git -C "$tmp" -c advice.detachedHead=false checkout -q --detach 'FETCH_HEAD^{commit}' &&
+    mv "$tmp" "$dir" ||
+    { rm -rf "$tmp"; return 1; }
+}
+
+# _vendor_repo REPO TRACK PATTERNS: bring vendor/<owner>__<repo>/ to the latest
+# commit of REPO (or its latest TRACK tag), limited to PATTERNS. The checkout
+# moves in place, so links into it never dangle; when the fetch fails the last
+# good copy is kept. Counts a change only when the commit moved. Returns 1 when
+# there is no checkout at all.
+_vendor_repo() {
+  local repo=$1 track=$2 want=$3 base dir url ref old new
+  base="${repo%%/*}__${repo#*/}"
+  dir="$ROOT/vendor/$base"
+  url="https://github.com/$repo.git"
+  if [ ! -d "$dir/.git" ]; then
+    if [ "$DRY_RUN" = 1 ]; then act "fetch the latest $repo${track:+ (tag $track)} into vendor/$base"; return 0; fi
+    if ! ref=$(_vendor_ref "$url" "$track"); then
+      warn "could not resolve $repo${track:+ (tag $track)}; its skills are skipped"
+      return 1
     fi
+    act "fetch the latest $repo${track:+ ($ref)} into vendor/$base" _fetch_new "$dir" "$url" "$ref" "$want"
+    [ -d "$dir/.git" ]
+    return
+  fi
+  old=$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)
+  if [ "$(_sparse_state "$dir")" != "$want" ]; then
+    act "update checked-out paths of vendor/$base" _apply_sparse "$dir" "$want"
+  fi
+  if [ "$DRY_RUN" = 1 ]; then
+    log "[dry-run] would fetch the latest $repo${track:+ (tag $track)} (now ${old:0:12})"
+    return 0
+  fi
+  if ! ref=$(_vendor_ref "$url" "$track") ||
+    ! git -C "$dir" fetch -q --depth 1 --filter=blob:none origin "$ref" 2>/dev/null; then
+    warn "could not fetch $repo; kept the last good copy (${old:0:12})"
+    return 0
+  fi
+  new=$(git -C "$dir" rev-parse 'FETCH_HEAD^{commit}')
+  [ "$new" = "$old" ] && return 0
+  act "update vendor/$base: ${old:0:12} -> ${new:0:12}${track:+ (${ref#refs/tags/})}" \
+    git -C "$dir" -c advice.detachedHead=false checkout -q --detach "$new"
+  return 0
+}
+
+# vendor/ dirs in use this run, one per line (for cleanup_vendor).
+VENDOR_DIRS=$'\n'
+
+# Fetch the latest of every core/skills.lock repo into vendor/<owner>__<repo>/
+# (only the paths the lock lists for it) and record each skill in
+# VENDORED_SKILLS as "name<TAB>skill dir<TAB>skip<TAB>plugin" (skip: agents,
+# or "-"; plugin: the core/plugins.lock plugin it is a copy of, or "").
+vendor_skills() {
+  local name repo path opts entries="" repo_list dir src track ok=$'\n' plugin skip
+  while IFS=$'\t' read -r name repo path opts; do
+    [ -n "$name" ] || continue
+    case $repo in */*) ;; *) warn "skills.lock: bad entry for '$name'; skipped"; continue ;; esac
     path=${path:-.}
     path=${path%/}
-    entries="$entries$name"$'\t'"$repo"$'\t'"$sha"$'\t'"$path"$'\n'
-    skips="$skips$name"$'\t'"$(opt_value "$opts" skip)"$'\n'
+    entries="$entries$name"$'\t'"$repo"$'\t'"$path"$'\t'"$opts"$'\n'
   done < <(lock_lines "$ROOT/core/skills.lock")
-  while IFS=$'\t' read -r name repo sha path; do
+  repo_list=$(printf '%s' "$entries" | cut -f2 | awk '!seen[$0]++')
+  while IFS= read -r repo <&3; do
+    [ -n "$repo" ] || continue
+    VENDOR_DIRS="$VENDOR_DIRS${repo%%/*}__${repo#*/}"$'\n'
+    track=$(printf '%s' "$entries" | awk -F '\t' -v r="$repo" '$2 == r { print $4 }' | while IFS= read -r opts; do opt_value "$opts" track; done | head -n 1)
+    if _vendor_repo "$repo" "$track" "$(_sparse_patterns "$entries" "$repo")"; then ok="$ok$repo"$'\n'; fi
+  done 3<<EOF
+$repo_list
+EOF
+  while IFS=$'\t' read -r name repo path opts; do
     [ -n "$name" ] || continue
-    dir="$ROOT/vendor/${repo%%/*}__${repo#*/}@$sha"
-    if ! in_list "$done_dirs" "$dir"; then
-      done_dirs="$done_dirs$dir"$'\n'
-      want=$(_sparse_patterns "$entries" "$repo" "$sha")
-      if [ -n "$want" ] && in_list $'\n'"$plugins"$'\n' "$repo"$'\t'"$sha"; then want="$want"$'\n'/.claude-plugin/; fi
-      if _vendor_dir "$dir" "$repo" "$sha" "$want"; then
-        ok_dirs="$ok_dirs$dir"$'\n'
-      fi
-    fi
-    in_list "$ok_dirs" "$dir" || continue   # act already warned
+    in_list "$ok" "$repo" || continue
+    dir="$ROOT/vendor/${repo%%/*}__${repo#*/}"
     if [ "$path" = "." ]; then src=$dir; else src="$dir/$path"; fi
     if [ "$DRY_RUN" != 1 ] && [ ! -d "$src" ]; then
-      warn "skills.lock: '$path' not found in $repo@${sha:0:12}; skill $name skipped"
+      warn "skills.lock: '$path' not found in the latest $repo; skill $name skipped"
       continue
     fi
-    skip=$(printf '%s' "$skips" | awk -F '\t' -v n="$name" '$1 == n { print $2; exit }')
-    VENDORED_SKILLS="$VENDORED_SKILLS$name"$'\t'"$src"$'\t'"$skip"$'\n'
+    plugin=$(plugin_for_repo "$repo")
+    skip=$(opt_value "$opts" skip)
+    # "-" for none: read collapses empty tab-separated fields.
+    VENDORED_SKILLS="$VENDORED_SKILLS$name"$'\t'"$src"$'\t'"${skip:--}"$'\t'"$plugin"$'\n'
   done <<EOF
 $entries
 EOF
+}
+
+# _links_into DIR: the first skill link (in the skill dirs agents read) that
+# points into DIR, or "".
+_links_into() {
+  local d e t
+  while IFS= read -r d; do
+    for e in "$d"/*; do
+      [ -L "$e" ] || continue
+      t=$(readlink "$e")
+      case $t in "$1" | "$1"/*) printf '%s' "$e"; return 0 ;; esac
+    done
+  done < <(printf '%s\n' "$SKILL_DIRS_DONE" "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.gemini/config/skills" "$HOME/.kiro/skills" | awk 'NF && !seen[$0]++')
+}
+
+# Remove vendor/ dirs that no skills.lock repo uses any more (such as the old
+# pinned <owner>__<repo>@<sha> dirs). A dir that a skill link still points
+# into (an agent not configured this run) is kept and reported.
+cleanup_vendor() {
+  local d base used
+  for d in "$ROOT"/vendor/*; do
+    [ -d "$d" ] || continue
+    base=$(basename "$d")
+    in_list "$VENDOR_DIRS" "$base" && continue
+    used=$(_links_into "$d")
+    if [ -n "$used" ]; then
+      log "NOTE: kept vendor/$base: $(pretty "$used") still links into it; it is removed once no link points there"
+      continue
+    fi
+    act "remove unused vendor/$base" rm -rf "$d"
+  done
 }
 
 # Print SKILL.md with the frontmatter description replaced by $SKILL_DESC
@@ -193,11 +264,11 @@ _explicit_only() {
 # description (and, with "explicit", marked explicit-only for Codex), and point
 # VENDORED_SKILLS at the copy. The vendor checkout is never edited.
 override_skills() {
-  local file="$ROOT/core/skills.overrides" name desc flags src skip out stage rest
+  local file="$ROOT/core/skills.overrides" name desc flags src meta out stage rest
   while IFS=$'\t' read -r name desc flags; do
     [ -n "$name" ] && [ -n "$desc" ] || continue
     src=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 == n { print $2; exit }')
-    skip=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 == n { print $3; exit }')
+    meta=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 == n { print $3 "\t" $4; exit }')
     if [ -z "$src" ]; then
       warn "skills.overrides: '$name' is not a vendored skill; skipped"
       continue
@@ -226,6 +297,6 @@ override_skills() {
     fi
     rest=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 != n')
     [ -z "$rest" ] || rest="$rest"$'\n'
-    VENDORED_SKILLS="$rest$name"$'\t'"$out"$'\t'"$skip"$'\n'
+    VENDORED_SKILLS="$rest$name"$'\t'"$out"$'\t'"$meta"$'\n'
   done < <(lock_lines "$file")
 }
