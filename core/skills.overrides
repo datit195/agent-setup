@@ -1,0 +1,3 @@
+# Replace a vendored skill's SKILL.md description. One per line, tab-separated: name, description.
+# The installer links a copy in build/skills/<name>/; the pinned checkout in vendor/ is left as fetched.
+impeccable	Impeccable design toolkit (polish, audit, critique, shape, animate, bolder and more). Use ONLY when the user explicitly says "impeccable" or runs /impeccable <command>. Do not use for general frontend work; taste-skill is the default for that.

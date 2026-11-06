@@ -7,6 +7,9 @@
   },
   "theme": "dark",
   "skipDangerousModePermissionPrompt": true,
+  "env": {
+    "IMPECCABLE_NO_TELEMETRY": "1"
+  },
   "hooks": {
     "PreToolUse": [
       {

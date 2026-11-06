@@ -18,8 +18,10 @@ One repo, cloned to `~/.agent-setup`, holds the instructions, rules, skills and 
 | `core/AGENTS.md`, `core/rules/*.md` | Shared instructions and rules |
 | `core/skills/<name>/` | Own skills |
 | `core/skills.lock` | Third-party skills pinned to a commit (fetched into `vendor/`) |
+| `core/skills.overrides` | Replacement descriptions for third-party skills |
 | `core/mcp.json` | Shared MCP servers |
 | `agents/<name>/adapter.sh` | Per-agent installer (`detect` and `install`) |
+| `shell/env.sh` | Shared shell env (e.g. `IMPECCABLE_NO_TELEMETRY=1`), sourced from `~/.zshrc` |
 | `agents/claude/` | Claude Code extras: `CLAUDE.md` stub, rules, hooks, `settings.base.json`, `plugins.lock` |
 | `tools/Brewfile`, `tools/tools.lock` | CLI tools |
 | `git.conf` | Global git identity (set only when unset) |
@@ -28,6 +30,20 @@ One repo, cloned to `~/.agent-setup`, holds the instructions, rules, skills and 
 | `build/`, `vendor/` | Generated, gitignored |
 
 `build/AGENTS.full.md` is `core/AGENTS.md` plus every `core/rules/*.md` (frontmatter stripped). Agents that read one instruction file link to it. The installer warns when it passes 32 KiB, the Codex limit.
+
+## Third-party skills
+
+| Skill | Source | Pin |
+|---|---|---|
+| `anatomy` | `wheresryan22/anatomy` (whole repo) | `1482e84` |
+| `threejs-*` (13 skills) | `cloudai-x/threejs-skills`, `skills/<name>` | `0e18186` |
+| `impeccable` | `pbakaus/impeccable`, `.agents/skills/impeccable` | release `skill-v4.7.0` = `aeeb3d8` |
+
+`impeccable` is a skill only (no plugin, no hooks), with telemetry off. Its description is overridden so agents use it only when the user says "impeccable" or runs `/impeccable <command>`; `taste-skill` stays the default for general frontend work.
+
+Vendoring is sparse: each `owner/repo@sha` is fetched once as a shallow, blob-less partial clone into `vendor/<owner>__<repo>@<sha>/`, and only the paths `skills.lock` lists for it are checked out (path `.` checks out the whole tree). The impeccable repo is about 1 GB, but its vendor dir is a few MB. When `skills.lock` adds or drops a path for an already fetched commit, the next run updates the checked-out paths in place.
+
+`core/skills.overrides` lines are `name<TAB>description`. For each one, the installer copies the vendored skill to `build/skills/<name>/`, replaces the `description:` in its `SKILL.md` frontmatter, and links that copy instead of the vendor dir. The pinned checkout is never edited, and the copy is rebuilt only when the source or the override changes.
 
 ## Shared vs per-agent
 
@@ -73,7 +89,9 @@ Options:
 - `--yes` installs missing tools without asking.
 - `--allow-any-root` allows another checkout location (tests only).
 
-Steps, in order: tools, git identity, build (`build/AGENTS.full.md` and `vendor/`), then each agent.
+Steps, in order: tools, git identity, shell env, build (`build/AGENTS.full.md`, `vendor/` and `build/skills/`), then each agent.
+
+The shell env step makes `~/.zshrc` source `shell/env.sh` with one line (added once, after a backup; the file is created if missing), so agents started from the shell inherit its variables. Claude Code also gets them through `env` in `settings.base.json`.
 
 ## Updating
 
@@ -83,7 +101,7 @@ git -C ~/.agent-setup pull && ~/.agent-setup/install.sh
 
 ## Editing
 
-Edit files in the repo. Rules, skills, hooks and `CLAUDE.md` are symlinks, so changes apply at once. After editing `core/AGENTS.md` or `core/rules/`, re-run `install.sh` to regenerate `build/AGENTS.full.md` (and, for Cursor, paste it again). After editing `core/mcp.json`, `core/skills.lock`, `plugins.lock` or `settings.base.json`, re-run `install.sh`.
+Edit files in the repo. Rules, skills, hooks and `CLAUDE.md` are symlinks, so changes apply at once. After editing `core/AGENTS.md` or `core/rules/`, re-run `install.sh` to regenerate `build/AGENTS.full.md` (and, for Cursor, paste it again). After editing `core/mcp.json`, `core/skills.lock`, `core/skills.overrides`, `plugins.lock` or `settings.base.json`, re-run `install.sh`. Edits to `shell/env.sh` apply in new shells.
 
 To add an agent, create `agents/<name>/adapter.sh` with `detect` and `install`, using the helpers in `lib/`, and add the name to `ALL_AGENTS` in `install.sh`.
 

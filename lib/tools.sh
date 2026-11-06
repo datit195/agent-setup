@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Tools step (Homebrew bundle + tools.lock) and git identity.
+# Tools step (Homebrew bundle + tools.lock), git identity and shell env.
 
 # ask QUESTION: 0 if the answer is yes. --yes answers yes; no terminal answers no.
 ask() {
@@ -68,4 +68,23 @@ git_identity() {
     fi
     act "git config --global $key '$val'" git config --global "$key" "$val"
   done < <(lock_lines "$ROOT/git.conf")
+}
+
+SHELL_ENV_LINE='[ -f "$HOME/.agent-setup/shell/env.sh" ] && . "$HOME/.agent-setup/shell/env.sh"'
+
+_append_lines() {
+  local file=$1; shift
+  if [ -s "$file" ] && [ -n "$(tail -c 1 "$file")" ]; then printf '\n' >>"$file" || return 1; fi
+  printf '%s\n' "$@" >>"$file"
+}
+
+# Make ~/.zshrc source shell/env.sh, so agents started from the shell get its env.
+shell_env() {
+  local rc="$HOME/.zshrc"
+  if [ -f "$rc" ] && grep -Fxq "$SHELL_ENV_LINE" "$rc"; then
+    log "~/.zshrc already sources shell/env.sh"
+    return 0
+  fi
+  backup_copy_once "$rc"
+  act "add shell/env.sh source line to ~/.zshrc" _append_lines "$rc" "# agent-setup: shared agent env (shell/env.sh)" "$SHELL_ENV_LINE"
 }
