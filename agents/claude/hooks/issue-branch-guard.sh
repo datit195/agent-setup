@@ -5,15 +5,21 @@
 # Opt out per repo: git config claude.issueWorkflow off
 set -u
 
+jq=/usr/bin/jq
+[ -x "$jq" ] || jq=jq
+# Windows (Git Bash): turn C:\x or C:/x paths into /c/x.
+unix_path() { if command -v cygpath >/dev/null 2>&1; then cygpath -u "$1"; else printf '%s' "$1"; fi; }
+
 input=$(cat 2>/dev/null) || exit 0
-path=$(printf '%s' "$input" | /usr/bin/jq -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null) || exit 0
+path=$(printf '%s' "$input" | "$jq" -r '.tool_input.file_path // .tool_input.notebook_path // empty' 2>/dev/null) || exit 0
 [ -n "$path" ] || exit 0
+path=$(unix_path "$path")
 
 # Relative paths resolve against the hook's cwd.
 if [ "${path#/}" = "$path" ]; then
-  cwd=$(printf '%s' "$input" | /usr/bin/jq -r '.cwd // empty' 2>/dev/null) || exit 0
+  cwd=$(printf '%s' "$input" | "$jq" -r '.cwd // empty' 2>/dev/null) || exit 0
   [ -n "$cwd" ] || exit 0
-  path="$cwd/$path"
+  path="$(unix_path "$cwd")/$path"
 fi
 
 # Never guard files inside a .git directory.

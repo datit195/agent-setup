@@ -26,7 +26,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/bin/python3 -I __HOME__/.claude/hooks/english-only-warn.py",
+            "command": "__PYTHON__ -I __HOME__/.claude/hooks/english-only-warn.py",
             "timeout": 10
           }
         ]

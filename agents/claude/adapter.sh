@@ -18,17 +18,40 @@ install() {
   fi
 }
 
+# Print the Python command for hooks: /usr/bin/python3 when it works (a stable
+# path), else python3, python or "py -3". On Windows the bare name is printed
+# (hooks run in Git Bash with the user's PATH). Fails when none works.
+python_cmd() {
+  local c
+  if [ "$OS" != windows ] && /usr/bin/python3 -c '' >/dev/null 2>&1; then
+    printf '/usr/bin/python3'
+    return 0
+  fi
+  for c in python3 python "py -3"; do
+    # shellcheck disable=SC2086
+    $c -c 'import sys; sys.exit(sys.version_info[0] != 3)' >/dev/null 2>&1 || continue
+    if [ "$OS" = windows ] || [ "$c" = "py -3" ]; then printf '%s' "$c"; else command -v "$c"; fi
+    return 0
+  done
+  return 1
+}
+
 # Merge settings.base.json into ~/.claude/settings.json: objects deep-merged
 # (base wins on scalars), arrays unioned, hook entries added only when none of
-# their commands is already registered for that event.
+# their commands is already registered for that event. __HOME__ and __PYTHON__
+# are filled in; hooks that need Python are dropped when there is none.
 claude_settings() {
-  local base="$ROOT/agents/claude/settings.base.json"
+  local base="$ROOT/agents/claude/settings.base.json" py
   [ -f "$base" ] || return 0
   if ! jq -e 'type == "object"' "$base" >/dev/null 2>&1; then
     warn "claude: settings.base.json is not valid JSON; skipped"
     return 0
   fi
-  json_merge "$HOME/.claude/settings.json" --slurpfile basefile "$base" --arg home "$HOME" '
+  if ! py=$(python_cmd); then
+    py=""
+    warn "claude: no Python 3 found (python3, python, py -3); the English-only hook is not registered"
+  fi
+  json_merge "$HOME/.claude/settings.json" --slurpfile basefile "$base" --arg home "$(native_path "$HOME")" --arg py "$py" '
     def merge($a; $b):
       if ($a | type) == "object" and ($b | type) == "object" then
         reduce ($b | keys_unsorted[]) as $k ($a; .[$k] = merge($a[$k]; $b[$k]))
@@ -37,7 +60,12 @@ claude_settings() {
       elif $b == null then $a
       else $b end;
     def cmds: [.[]?.hooks[]?.command];
-    ($basefile[0] | walk(if type == "string" then gsub("__HOME__"; $home) else . end)) as $base
+    ($basefile[0]
+      | if $py == "" and .hooks then
+          .hooks |= map_values(map(.hooks |= map(select(.command | test("__PYTHON__") | not)))
+                                       | map(select(.hooks | length > 0)))
+        else . end
+      | walk(if type == "string" then gsub("__HOME__"; $home) | gsub("__PYTHON__"; $py) else . end)) as $base
     | merge(.; $base | del(.hooks))
     | reduce (($base.hooks // {}) | to_entries[]) as $ev (.;
         .hooks[$ev.key] = reduce $ev.value[] as $entry ((.hooks[$ev.key] // []);

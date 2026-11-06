@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Configure AI coding agents on this Mac from the shared core in this repo.
+# Configure AI coding agents from the shared core in this repo.
+# Runs on macOS, Linux (including WSL) and Windows (Git Bash).
 # Safe to re-run: every step is idempotent. Try --dry-run first.
 set -euo pipefail
 
@@ -13,7 +14,7 @@ Usage: install.sh [options]
   --dry-run          print every action, change nothing
   --agents a,b       only these agents (default: every detected agent)
                      known: $ALL_AGENTS
-  --skip-tools       skip Homebrew bundle and tools.lock installs
+  --skip-tools       skip package manager and tools.lock installs
   --yes              install missing tools without asking
   --allow-any-root   allow running from a checkout other than ~/.agent-setup (tests)
   -h, --help         show this help
@@ -40,7 +41,11 @@ for lib in common fs json build tools; do
   . "$ROOT/lib/$lib.sh"
 done
 
-[ "$(uname -s)" = Darwin ] || warn "built for macOS; continuing on $(uname -s)"
+case $OS in
+  unknown) warn "untested OS $(uname -s); continuing" ;;
+  # Git Bash may hand HOME over as C:\Users\x or C:/Users/x; use /c/Users/x.
+  windows) HOME=$(cygpath -u "$HOME"); export HOME; BACKUP_DIR="$HOME/.agent-setup-backups/$RUN_TS" ;;
+esac
 if [ "$ANY_ROOT" != 1 ]; then
   expected=$(cd "$HOME/.agent-setup" 2>/dev/null && pwd -P || true)
   [ "$ROOT" = "$expected" ] ||
@@ -49,10 +54,16 @@ fi
 for a in $SELECTED; do
   case " $ALL_AGENTS " in *" $a "*) ;; *) die "unknown agent '$a' (known: $ALL_AGENTS)" ;; esac
 done
-has_cmd git || die "git is required (xcode-select --install)"
+case $OS in
+  macos) git_hint="xcode-select --install" ;;
+  windows) git_hint="install Git for Windows and run from Git Bash" ;;
+  *) git_hint="install git with your package manager" ;;
+esac
+has_cmd git || die "git is required ($git_hint)"
 cd "$ROOT"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agent-setup.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT
+setup_link_mode
 
 [ "$DRY_RUN" = 1 ] && log "Dry run: nothing will be changed."
 log "Repo: $(pretty "$ROOT")"
@@ -74,7 +85,7 @@ if ! has_cmd jq; then
       summary
       exit 0
     fi
-    die "jq is required: run install.sh without --skip-tools, or brew install jq"
+    die "jq is required: run install.sh without --skip-tools, or install jq with your package manager"
   fi
 fi
 

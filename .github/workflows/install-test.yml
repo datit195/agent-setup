@@ -1,0 +1,44 @@
+# Run install.sh in a sandbox HOME on macOS, Linux and Windows (Git Bash).
+name: install-test
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  install-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        link_mode: [""]
+        include:
+          - os: windows-latest
+            link_mode: copy
+    name: ${{ matrix.os }}${{ matrix.link_mode && ' (copy mode)' || '' }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      AGENT_SETUP_LINK_MODE: ${{ matrix.link_mode }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show environment
+        run: |
+          uname -a
+          bash --version | head -n 1
+          for c in git jq python3 python py brew apt-get winget; do printf '%-8s %s\n' "$c" "$(command -v "$c" || echo '-')"; done
+
+      - name: Install, re-run, dry-run and check results
+        run: tests/install-test.sh
+
+      - name: Tools step (dry run, package manager detection)
+        run: |
+          HOME=$(mktemp -d) ./install.sh --dry-run --allow-any-root --agents claude | tee "$RUNNER_TEMP/tools.log"
+          grep -q '^== Tools ==' "$RUNNER_TEMP/tools.log"
