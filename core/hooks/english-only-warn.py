@@ -1,8 +1,10 @@
 #!/usr/bin/python3 -I
 # PreToolUse hook: warn (never block) when a tool call writes Vietnamese text.
-# Emits hookSpecificOutput.additionalContext with no permissionDecision, so the
-# call goes through the normal permission flow and Claude sees the warning next
-# to the tool result. Any error -> exit 0 silently (fail open).
+# Reads Claude Code, Codex (apply_patch) and Cursor hook input; Antigravity runs
+# it through antigravity-shim.py. Emits hookSpecificOutput.additionalContext
+# with no permissionDecision, so the call goes through the normal permission
+# flow and the agent sees the warning next to the tool result (Cursor gets
+# agent_message instead). Any error -> exit 0 silently (fail open).
 # Opt out per repo: git config claude.englishOnly off
 import json
 import os
@@ -30,22 +32,42 @@ def collect_strings(value, out):
             collect_strings(v, out)
 
 
+PATCH_FILE = re.compile(r"^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$")
+
+
+def patch_text(ti):
+    p = ti.get("command") or ti.get("patch") or ti.get("input")
+    return p if isinstance(p, str) else ""
+
+
 def texts_for(tool, ti):
-    if tool == "Write":
+    if tool == "apply_patch":
+        # Codex: only the added lines of the patch.
+        return ["\n".join(l[1:] for l in patch_text(ti).splitlines()
+                          if l.startswith("+") and not l.startswith("+++"))]
+    if tool == "Write" and isinstance(ti.get("content"), str):
         return [ti.get("content")]
-    if tool == "Edit":
+    if tool == "Edit" and isinstance(ti.get("new_string"), str):
         return [ti.get("new_string")]
     if tool == "MultiEdit":
         return [e.get("new_string") for e in ti.get("edits") or [] if isinstance(e, dict)]
     if tool == "NotebookEdit":
         return [ti.get("new_source")]
-    if tool == "Bash":
+    if tool in ("Bash", "Shell"):
         return [ti.get("command")]
-    if tool.startswith("mcp__"):
-        out = []
-        collect_strings(ti, out)
-        return out
-    return []
+    # MCP tools (mcp__x__y, Cursor MCP:y), other agents' edit tools and
+    # unknown input shapes: every string in the input. Only tools that the
+    # hook's matcher selects get here.
+    out = []
+    collect_strings(ti, out)
+    return out
+
+
+def paths_for(tool, ti):
+    if tool == "apply_patch":
+        return [m.group(1) for m in map(PATCH_FILE.match, patch_text(ti).splitlines()) if m]
+    p = ti.get("file_path") or ti.get("notebook_path") or ti.get("path")
+    return [p] if isinstance(p, str) and p else []
 
 
 def is_translation_path(path):
@@ -98,9 +120,12 @@ def main():
     ti = data.get("tool_input") or {}
     if not isinstance(ti, dict):
         return
-    path = ti.get("file_path") or ti.get("notebook_path")
-    if isinstance(path, str) and path and is_translation_path(path):
+    paths = paths_for(tool, ti)
+    if paths and all(is_translation_path(p) for p in paths):
         return
+    path = paths[0] if paths else None
+    roots = data.get("workspace_roots")
+    cwd = data.get("cwd") or (roots[0] if isinstance(roots, list) and roots else None)
 
     found = None
     for t in texts_for(tool, ti):
@@ -111,17 +136,20 @@ def main():
     if not found:
         return
 
-    if english_only_off(repo_dir(path if isinstance(path, str) else None, data.get("cwd"))):
+    if english_only_off(repo_dir(path, cwd)):
         return
 
     msg = ('English-only writing: this %s contains Vietnamese text (e.g. "%s"). '
            "Rewrite it in English unless an exception applies (translation file, "
            "content for Vietnamese users, verbatim quote, proper name, or the user "
-           "asked for Vietnamese) - see ~/.agent-setup/core/rules/language.md and "
-           "~/.agent-setup/agents/claude/rules/claude-extras.md. "
+           "asked for Vietnamese) - see ~/.agent-setup/core/rules/language.md. "
            "Turn off for a repo: git config claude.englishOnly off") % (tool, found)
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
-                                             "additionalContext": msg}}))
+    if "cursor_version" in data or "workspace_roots" in data:
+        # Cursor: no additionalContext on preToolUse; never set "permission".
+        print(json.dumps({"agent_message": msg}))
+    else:
+        print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                 "additionalContext": msg}}))
 
 
 if __name__ == "__main__":

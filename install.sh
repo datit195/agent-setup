@@ -36,7 +36,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-for lib in common fs json build tools; do
+for lib in common fs json build tools hooks; do
   # shellcheck source=/dev/null
   . "$ROOT/lib/$lib.sh"
 done

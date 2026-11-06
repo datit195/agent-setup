@@ -118,10 +118,10 @@ _vendor_dir() {
 
 # For each core/skills.lock entry, make sure vendor/<owner>__<repo>@<sha>/ holds
 # that commit (only the paths the lock needs from it), and record
-# "name<TAB>skill dir" in VENDORED_SKILLS.
+# "name<TAB>skill dir<TAB>skip" in VENDORED_SKILLS.
 vendor_skills() {
-  local name repo sha path dir src entries="" done_dirs=$'\n' ok_dirs=$'\n'
-  while IFS=$'\t' read -r name repo sha path; do
+  local name repo sha path skip dir src entries="" skips="" done_dirs=$'\n' ok_dirs=$'\n'
+  while IFS=$'\t' read -r name repo sha path skip; do
     [ -n "$name" ] || continue
     if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$' || [ -z "$repo" ]; then
       warn "skills.lock: bad entry for '$name'; skipped"
@@ -130,6 +130,7 @@ vendor_skills() {
     path=${path:-.}
     path=${path%/}
     entries="$entries$name"$'\t'"$repo"$'\t'"$sha"$'\t'"$path"$'\n'
+    skips="$skips$name"$'\t'"${skip#skip=}"$'\n'
   done < <(lock_lines "$ROOT/core/skills.lock")
   while IFS=$'\t' read -r name repo sha path; do
     [ -n "$name" ] || continue
@@ -146,7 +147,8 @@ vendor_skills() {
       warn "skills.lock: '$path' not found in $repo@${sha:0:12}; skill $name skipped"
       continue
     fi
-    VENDORED_SKILLS="$VENDORED_SKILLS$name"$'\t'"$src"$'\n'
+    skip=$(printf '%s' "$skips" | awk -F '\t' -v n="$name" '$1 == n { print $2; exit }')
+    VENDORED_SKILLS="$VENDORED_SKILLS$name"$'\t'"$src"$'\t'"$skip"$'\n'
   done <<EOF
 $entries
 EOF
@@ -172,14 +174,26 @@ _set_description() {
 
 _replace_dir() { rm -rf "$2" && mkdir -p "$(dirname "$2")" && mv "$1" "$2"; }
 
-# For each core/skills.overrides entry ("name<TAB>description"), build
-# build/skills/<name>/ as a copy of the vendored skill with that description,
-# and point VENDORED_SKILLS at the copy. The vendor checkout is never edited.
+# Mark a skill copy explicit-only for Codex: agents/openai.yaml gets
+# policy.allow_implicit_invocation: false unless it already has a policy.
+_explicit_only() {
+  local y="$1/agents/openai.yaml"
+  mkdir -p "$1/agents" || return 1
+  [ -f "$y" ] && grep -q '^policy:' "$y" && return 0
+  if [ -s "$y" ] && [ -n "$(tail -c 1 "$y")" ]; then printf '\n' >>"$y"; fi
+  printf 'policy:\n  allow_implicit_invocation: false\n' >>"$y"
+}
+
+# For each core/skills.overrides entry ("name<TAB>description[<TAB>explicit]"),
+# build build/skills/<name>/ as a copy of the vendored skill with that
+# description (and, with "explicit", marked explicit-only for Codex), and point
+# VENDORED_SKILLS at the copy. The vendor checkout is never edited.
 override_skills() {
-  local file="$ROOT/core/skills.overrides" name desc src out stage rest
-  while IFS=$'\t' read -r name desc; do
+  local file="$ROOT/core/skills.overrides" name desc flags src skip out stage rest
+  while IFS=$'\t' read -r name desc flags; do
     [ -n "$name" ] && [ -n "$desc" ] || continue
     src=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 == n { print $2; exit }')
+    skip=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 == n { print $3; exit }')
     if [ -z "$src" ]; then
       warn "skills.overrides: '$name' is not a vendored skill; skipped"
       continue
@@ -191,6 +205,9 @@ override_skills() {
       if ! _set_description "$src/SKILL.md" "$desc" >"$stage/SKILL.md"; then
         warn "skills.overrides: no description in $name/SKILL.md; override skipped"
         continue
+      fi
+      if [ "$flags" = explicit ] && ! _explicit_only "$stage"; then
+        warn "skills.overrides: could not mark $name explicit-only"
       fi
       if [ -d "$out" ] && diff -rq "$stage" "$out" >/dev/null 2>&1; then
         log "build/skills/$name up to date"
@@ -205,6 +222,6 @@ override_skills() {
     fi
     rest=$(printf '%s' "$VENDORED_SKILLS" | awk -F '\t' -v n="$name" '$1 != n')
     [ -z "$rest" ] || rest="$rest"$'\n'
-    VENDORED_SKILLS="$rest$name"$'\t'"$out"$'\n'
+    VENDORED_SKILLS="$rest$name"$'\t'"$out"$'\t'"$skip"$'\n'
   done < <(lock_lines "$file")
 }

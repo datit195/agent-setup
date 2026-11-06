@@ -14,7 +14,7 @@ _write_file() {
     # GNU stat first: BSD stat rejects -c without printing anything.
     mode=$(stat -c %a "$file" 2>/dev/null || stat -f %Lp "$file") && chmod "$mode" "$tmp"
   else
-    chmod 644 "$tmp"
+    chmod "${NEW_FILE_MODE:-644}" "$tmp"
   fi
   printf '%s\n' "$content" >"$tmp" && mv "$tmp" "$file" || { rm -f "$tmp"; return 1; }
 }
@@ -124,4 +124,11 @@ mcp_cli_add() {
 # Warn when a CLI cannot receive the server's env vars.
 mcp_env_unsupported() {
   [ -z "$MCP_ENV_KEYS" ] || warn "$1: MCP server $2 needs env ($MCP_ENV_KEYS) which this CLI cannot set; add it by hand"
+}
+
+# mcp_auto_approve JQ_STRING: a JSON array with JQ_STRING (a jq expression
+# using $n, the server name) for every core/mcp.json server marked
+# "autoApprove": true. Example: mcp_auto_approve '"mcp__\($n)__*"'
+mcp_auto_approve() {
+  jq -c "[.servers // {} | to_entries[] | select(.value.autoApprove == true) | .key as \$n | $1]" "$ROOT/core/mcp.json"
 }
