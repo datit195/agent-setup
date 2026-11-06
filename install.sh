@@ -82,12 +82,17 @@ fi
 section "Git identity"
 git_identity
 
-# 3. Build
+# 3. Shell env
+section "Shell env"
+shell_env
+
+# 4. Build
 section "Build"
 build_agents_md
 vendor_skills
+override_skills
 
-# 4. Agents
+# 5. Agents
 section "Agents"
 installed_any=0
 for name in $ALL_AGENTS; do
