@@ -1,7 +1,7 @@
 ---
 title: Issue workflow
 description: Every change starts as an issue, is built on its own branch, and the issue is closed with a done label when merged into the default branch
-updated: 2026-11-06
+updated: 2026-11-07
 status: active
 ---
 
@@ -78,3 +78,15 @@ Only when the user asks to open it:
   - GitLab: include `gitlab/issue-done.gitlab-ci.yml` in `.gitlab-ci.yml`; needs an `ISSUE_BOT_TOKEN` CI variable.
   - Setup steps: `~/.agent-setup/issue-workflow/README.md`.
 - The first time this workflow is used in a repo that lacks the automation, offer to add it as its own small issue and branch, following this same workflow. Do not add it without the user's yes.
+
+## Guard hook
+
+- A hook (`~/.agent-setup/core/hooks/issue-branch-guard.sh`, installed for Claude Code, Codex, Cursor and Antigravity) blocks file edits on the default branch and on `master`/`main` in GitHub/GitLab repos, so the branch must exist before the first edit.
+- It honours the per-repo opt-out `git config claude.issueWorkflow off`.
+
+## Fit with other rules and skills
+
+- **Coordinator mode:** the coordinator creates or identifies the issue and branch (or delegates that) before delegating any edit task, and puts the issue number and branch name in every subagent brief. Subagents work on that branch.
+- **Superpowers `using-git-worktrees`:** worktree branches use the same `<type>/<N>-<slug>` naming.
+- **Superpowers `finishing-a-development-branch`:** finishing means a PR/MR into `<default>` with `Closes #N`.
+- **`push` skill:** still applies; commits it makes carry `Refs #N`.

@@ -79,3 +79,28 @@ summary() {
     log "No warnings."
   fi
 }
+
+# Print the Python 3 command for hooks and helpers: /usr/bin/python3 when it
+# works (a stable path), else python3, python or "py -3". On Windows the bare
+# name is printed (hooks run with the user's PATH). Fails when none works.
+python_cmd() {
+  local c
+  if [ "$OS" != windows ] && /usr/bin/python3 -c '' >/dev/null 2>&1; then
+    printf '/usr/bin/python3'
+    return 0
+  fi
+  for c in python3 python "py -3"; do
+    # shellcheck disable=SC2086
+    $c -c 'import sys; sys.exit(sys.version_info[0] != 3)' >/dev/null 2>&1 || continue
+    if [ "$OS" = windows ] || [ "$c" = "py -3" ]; then printf '%s' "$c"; else command -v "$c"; fi
+    return 0
+  done
+  return 1
+}
+
+# The shared agent env as a JSON object: every "export KEY=VALUE" line of
+# shell/env.sh (surrounding quotes removed). shell/env.sh is the only source.
+shared_env_json() {
+  sed -n -e '/^export [A-Za-z_][A-Za-z0-9_]*=/!d' -e 's/^export //' -e 's/=\(["'"'"']\)\(.*\)\1$/=\2/' -e p "$ROOT/shell/env.sh" | tr -d '\r' |
+    jq -Rn '[inputs | capture("^(?<k>[^=]+)=(?<v>.*)$") | {(.k): .v}] | add // {}'
+}

@@ -1,7 +1,7 @@
 ---
 title: Language
 description: Chat in any language, but everything the agent writes is in English
-updated: 2026-11-06
+updated: 2026-11-07
 status: active
 ---
 
@@ -41,3 +41,7 @@ Keep Vietnamese for:
 ## Enforcement
 
 Before writing, check that the content is English unless an exception applies.
+
+- A hook (`~/.agent-setup/core/hooks/english-only-warn.py`, installed for Claude Code, Codex, Cursor and Antigravity) warns when a write contains Vietnamese.
+- When warned, rewrite in English, unless an exception applies; then say briefly which one.
+- A repo can turn the warning off with `git config claude.englishOnly off`.

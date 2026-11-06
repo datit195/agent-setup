@@ -85,13 +85,15 @@ link_each() {
   done
 }
 
-# Vendored skills, filled by vendor_skills (lib/build.sh): lines "name<TAB>dir".
+# Vendored skills, filled by vendor_skills (lib/build.sh): lines
+# "name<TAB>dir<TAB>agents to skip (comma-separated)".
 VENDORED_SKILLS=""
 SKILL_DIRS_DONE=$'\n'
 
-# link_skills DEST_DIR: link every own skill and every vendored skill into DEST_DIR/<name>.
+# link_skills DEST_DIR [AGENT]: link every own skill and every vendored skill
+# into DEST_DIR/<name>, except vendored skills whose lock entry skips AGENT.
 link_skills() {
-  local dest=$1 d name src seen=$'\n'
+  local dest=$1 agent=${2:-} d name src skip seen=$'\n'
   in_list "$SKILL_DIRS_DONE" "$dest" && return 0
   SKILL_DIRS_DONE="$SKILL_DIRS_DONE$dest"$'\n'
   for d in "$ROOT"/core/skills/*/; do
@@ -100,8 +102,9 @@ link_skills() {
     seen="$seen$name"$'\n'
     link "${d%/}" "$dest/$name"
   done
-  while IFS=$'\t' read -r name src; do
+  while IFS=$'\t' read -r name src skip; do
     [ -n "$name" ] || continue
+    case ",$skip," in *",$agent,"*) [ -n "$agent" ] && continue ;; esac
     if in_list "$seen" "$name"; then
       warn "skill name '$name' is both own and vendored; kept the own one"
       continue

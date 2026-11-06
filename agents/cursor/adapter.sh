@@ -1,7 +1,11 @@
 # shellcheck shell=bash
-# Cursor (app and `agent` CLI). User rules live in the app UI only.
+# Cursor (app and `agent` CLI). User rules live in the app UI only. Hooks come
+# from ~/.claude/settings.json, which Cursor imports (third-party hooks).
 
-detect() { [ -d /Applications/Cursor.app ] || [ -d "$HOME/.cursor" ] || has_cmd agent; }
+detect() {
+  [ -d /Applications/Cursor.app ] || [ -d "$HOME/.cursor" ] || has_cmd agent || has_cmd cursor ||
+    [ -n "${CURSOR_CONFIG_DIR:-}" ]
+}
 
 install() {
   local rules="$ROOT/build/AGENTS.full.md"
@@ -16,6 +20,31 @@ install() {
   fi
   shared_skills
   mcp_merge_file "$HOME/.cursor/mcp.json" '.mcpServers' '{type: "stdio", command: $c, args: $a, env: $e}'
+  cursor_cli_config
+}
+
+# The CLI config: $CURSOR_CONFIG_DIR, else $XDG_CONFIG_HOME/cursor on Linux
+# when XDG_CONFIG_HOME is set, else ~/.cursor.
+cursor_cli_config_path() {
+  if [ -n "${CURSOR_CONFIG_DIR:-}" ]; then
+    printf '%s/cli-config.json' "$CURSOR_CONFIG_DIR"
+  elif { [ "$OS" = linux ] || [ "$OS" = wsl ]; } && [ -n "${XDG_CONFIG_HOME:-}" ]; then
+    printf '%s/cursor/cli-config.json' "$XDG_CONFIG_HOME"
+  else
+    printf '%s/.cursor/cli-config.json' "$HOME"
+  fi
+}
+
+# CLI permissions: auto-review approvals (like Claude Code's auto mode) unless
+# an approval mode is set, and allow the auto-approved MCP servers. A missing
+# file is created with the minimal fields the CLI writes itself.
+cursor_cli_config() {
+  json_merge "$(cursor_cli_config_path)" --argjson allow "$(mcp_auto_approve '"Mcp(\($n):*)"')" '
+    .version //= 1
+    | .editor //= {vimMode: false}
+    | .approvalMode //= "auto-review"
+    | .permissions.deny //= []
+    | .permissions.allow = (reduce $allow[] as $x ((.permissions.allow // []); if index([$x]) then . else . + [$x] end))'
 }
 
 # clipboard_copy FILE: copy FILE with the first clipboard tool that works.

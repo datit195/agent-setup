@@ -1,0 +1,29 @@
+{
+  "_comment": "Hooks for every agent, from one place. script: a file in core/hooks/ (.py runs with Python 3, .sh with bash); command: a command line. event: the Claude Code event name. matcher: per-agent tool-name regex for PreToolUse; an agent without one does not get the hook. blocks: the hook may block (exit 2); other hooks never block. Cursor imports the Claude Code hooks from ~/.claude/settings.json.",
+  "hooks": [
+    {
+      "script": "issue-branch-guard.sh",
+      "event": "PreToolUse",
+      "blocks": true,
+      "matcher": {
+        "claude": "Edit|Write|NotebookEdit",
+        "codex": "^apply_patch$",
+        "antigravity": "^(write_to_file|replace_file_content|multi_replace_file_content)$"
+      }
+    },
+    {
+      "script": "english-only-warn.py",
+      "event": "PreToolUse",
+      "timeout": 10,
+      "matcher": {
+        "claude": "^(Edit|Write|MultiEdit|NotebookEdit|Bash|mcp__.*__.*(create|update|batch|append|insert|post|send|comment|edit|write|reply).*)$",
+        "codex": "^(apply_patch|Bash|mcp__.*__.*(create|update|batch|append|insert|post|send|comment|edit|write|reply).*)$",
+        "antigravity": "^(write_to_file|replace_file_content|multi_replace_file_content|run_command)$"
+      }
+    },
+    {
+      "command": "codegraph prompt-hook",
+      "event": "UserPromptSubmit"
+    }
+  ]
+}
