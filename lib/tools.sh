@@ -168,8 +168,8 @@ install_tools() {
 agent_reach_check() {
   local bad line
   has_cmd agent-reach && has_cmd jq || return 0
-  bad=$(agent-reach doctor </dev/null 2>/dev/null | tr -d '\r' | jq -r '.result.channels[]?
-    | select(.level == "default" and .status == "needs_setup") | "\(.channel): \(.problems | join("; "))"' 2>/dev/null) || return 0
+  bad=$(agent-reach doctor </dev/null 2>/dev/null | jq -r '.result.channels[]?
+    | select(.level == "default" and .status == "needs_setup") | "\(.channel): \(.problems | join("; "))"' 2>/dev/null | tr -d '\r') || return 0
   while IFS= read -r line; do
     [ -z "$line" ] || warn "agent-reach: default channel $line (fix: docs/reference.md, Install internals)"
   done <<EOF
