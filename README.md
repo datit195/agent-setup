@@ -109,7 +109,7 @@ gh repo clone datit195/agent-setup ~/.agent-setup
 | `--check` | List newer upstream versions of what is installed (`--json` for JSON, `--force` to check upstream now); see [Updates](#updates-you-approve-every-update) |
 | `--update [names\|all]` | Approve newer versions (asks per item; `--yes` approves the named ones) and install them |
 | `--snooze <names\|all>`, `--skip <name>@<version>` | Ask about an update again in 24 hours, or not for this version |
-| `--fix-duplicates` | Switch plugins installed from another marketplace or source to the one in `core/plugins.lock`; move unmanaged duplicate skills to the backups |
+| `--fix-duplicates` | Switch plugins installed from another marketplace or source to the one in `core/plugins.lock`; move unmanaged duplicate skills to the backups; delete Claude Code plugin cache folders that no installed plugin uses (core/plugins.lock plugins only) |
 | `--skip-tools` | Skip the package manager step (Homebrew, apt-get/dnf/pacman or winget) and `tools/tools.lock` |
 | `--yes` | Install missing tools without asking; with `--update <names>`, approve them without asking |
 | `-h`, `--help` | Show help |
@@ -158,7 +158,7 @@ Each machine asks and approves separately, so two machines may run different app
 
 Details: [updates](docs/reference.md#updates), [plugins per agent](docs/reference.md#plugins-per-agent).
 
-**Duplicates.** The installer never gives an agent the same skill twice: an agent that has a plugin natively does not get its vendored copy. It warns when a plugin is already installed from another marketplace (it does not install a second copy), or when a skill is in more than one folder an agent reads. `install.sh --fix-duplicates` switches such plugins to the source in `core/plugins.lock` and moves unmanaged duplicate skill folders to the backups.
+**Duplicates.** The installer never gives an agent the same skill twice: an agent that has a plugin natively does not get its vendored copy. It warns when a plugin is already installed from another marketplace (it does not install a second copy), or when a skill is in more than one folder an agent reads. `install.sh --fix-duplicates` switches such plugins to the source in `core/plugins.lock`, moves unmanaged duplicate skill folders to the backups, and deletes the Claude Code plugin cache folders left behind by uninstalled copies (no backup: caches are downloaded again when needed).
 
 ## What you get
 
