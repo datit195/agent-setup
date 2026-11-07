@@ -113,7 +113,7 @@ _codex_drop_old_catalogs() {
     [ -n "$m" ] || continue
     case $s in "$base"/* | "$(native_path "$base")"/*) ;; *) continue ;; esac
     ! printf '%s\n' "$wanted" | grep -qx "$m" || continue
-    for o in $(printf '%s' "$installed" | jq -r --arg m "$m" '.[] | select((.pluginId | sub(".*@"; "")) == $m) | .pluginId'); do
+    for o in $(printf '%s' "$installed" | jq -r --arg m "$m" '.[] | select((.pluginId | sub(".*@"; "")) == $m) | .pluginId' | tr -d '\r'); do
       act "codex: remove plugin $o (from the old pinned catalog $m)" codex plugin remove "$o"
     done
     act "codex: remove plugin marketplace $m (old pinned catalog)" codex plugin marketplace remove "$m"
@@ -155,7 +155,7 @@ codex_plugins() {
       warn "codex: $(repo_item "$repo") has no approved version; Codex gets the vendored copy of $name"
       continue
     fi
-    others=$(printf '%s' "$installed" | jq -r --arg n "$name" --arg id "$id" '.[] | select(.name == $n and .pluginId != $id) | .pluginId')
+    others=$(printf '%s' "$installed" | jq -r --arg n "$name" --arg id "$id" '.[] | select(.name == $n and .pluginId != $id) | .pluginId' | tr -d '\r')
     if [ -n "$others" ]; then
       if [ "$FIX_DUPLICATES" != 1 ]; then
         native_add codex "$name"
