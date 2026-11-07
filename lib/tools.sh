@@ -159,6 +159,22 @@ install_tools() {
   done 3< <(lock_lines "$ROOT/tools/tools.lock")
   log "tools: present:${ok:- none} | installed:${added:- none} | manual:${manual:- none} | declined:${declined:- none} | failed:${failed:- none}"
   [ -z "$failed" ] || warn "tools failed to install:$failed"
+  agent_reach_check
+}
+
+# Warn about each Agent Reach default channel that is not set up: `agent-reach
+# setup` exits 0 even when a channel's tools fail to install. `agent-reach
+# doctor` is offline and fast, so this also catches an older broken install.
+agent_reach_check() {
+  local bad line
+  has_cmd agent-reach && has_cmd jq || return 0
+  bad=$(agent-reach doctor </dev/null 2>/dev/null | jq -r '.result.channels[]?
+    | select(.level == "default" and .status == "needs_setup") | "\(.channel): \(.problems | join("; "))"' 2>/dev/null | tr -d '\r') || return 0
+  while IFS= read -r line; do
+    [ -z "$line" ] || warn "agent-reach: default channel $line (fix: docs/reference.md, Install internals)"
+  done <<EOF
+$bad
+EOF
 }
 
 # With --skip-tools: install only the tools this run's --update approved.
@@ -170,6 +186,7 @@ install_updated_tools() {
     install_tool "$name"
     [ "$TOOL_RESULT" != failed ] || warn "tool $name failed to install"
   done 3< <(lock_lines "$ROOT/tools/tools.lock")
+  ! updating agent-reach || agent_reach_check
 }
 
 # Set each git.conf key globally, only when it is not set yet.

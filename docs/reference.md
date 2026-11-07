@@ -243,6 +243,8 @@ The repo must live at `~/.agent-setup`; the links and the Claude import stub dep
 
 The tools step installs `gh`, `jq`, `uv` and `node` with Homebrew on macOS (`tools/Brewfile`); on Linux with Homebrew when it is installed, else apt-get, dnf or pacman (`uv` through its official installer); on Windows with winget. Then it installs the `tools/tools.lock` entries for this OS. After winget installs, open a new Git Bash so the tools are on `PATH`, and re-run.
 
+`agent-reach` is installed with `uv tool install --managed-python`, so it runs on a Python that uv downloads, with `pip` and `venv`; a system Python without them (for example Debian or Mint without `python3-venv`) broke the private tool installs of `agent-reach setup`. `agent-reach setup` exits 0 even when a default channel's tools fail to install, so after the tools step (and after `--update agent-reach`) the installer runs `agent-reach doctor`, which is offline, and warns once per default channel whose status is `needs_setup`, with its problems. To repair a machine set up before `--managed-python` (same version, so it is not reinstalled): run `uv tool install --force --managed-python` with the wheel URL from `tools/tools.lock` at the approved release, delete the broken private tool dirs under `~/.agent-reach/tools/` (for example `ffmpeg` and `bili-cli`), then run `agent-reach setup`.
+
 On Windows the installer uses native symlinks when it may create them (Developer Mode or an admin shell). Otherwise it copies the files and warns once: in copy mode, edits in the repo reach the agents only after re-running `install.sh`. Re-runs compare contents, so they still report 0 changes when nothing differs.
 
 The shell env step makes the shell rc files source `shell/env.sh` with one line (added once, after a backup), so agents started from the shell inherit its variables. On macOS that is `~/.zshrc` (created if missing) and `~/.bashrc` if it exists; on Linux, WSL and Windows it is `~/.bashrc` (created if missing) and `~/.zshrc` if it exists. Claude Code also gets them through `env` in `~/.claude/settings.json`, merged from `shell/env.sh`.
@@ -276,7 +278,7 @@ Anything the installer replaces or edits is first saved under `~/.agent-setup-ba
 - Windows: the `codegraph` CLI is a `.cmd` launcher, which Git Bash runs only as `codegraph.cmd`; the `codegraph prompt-hook` Claude hook and the `codegraph` and `npx` MCP servers may need a `cmd /c` wrapper there. Not verified.
 - Windows: config paths are verified only for Zed (`%APPDATA%\Zed`), Amp, OpenCode and Crush (all under `~/.config`); Devin, Kiro, Cline, Droid, Copilot, Antigravity and Gemini keep their macOS paths under `~`, which is unconfirmed on Windows.
 - Linux and Windows: app-only installs (no CLI, no config dir yet) of Cursor, Zed, Kiro, Devin and Antigravity are not detected, because detection looks in `/Applications` on macOS; select them with `--agents`.
-- `agent-reach setup` is only tested on macOS.
+- `agent-reach setup` was run for real on macOS and Linux Mint, not on Windows; the doctor check after it is tested only against a stub.
 - The Linux and Windows package-manager installs are exercised in CI only as a dry run.
 - Plugins: the shape of `agy plugin list --json` is read loosely and unverified.
 - The official Claude marketplace can lag the superpowers repo (7.0.0 against 7.0.2 in November 2026), and every agent follows the commit it offers.

@@ -240,7 +240,7 @@ Hooks fail open: a missing or broken script never blocks.
 |---|---|
 | `gh`, `jq`, `uv`, `node` | Homebrew on macOS; Homebrew, apt-get, dnf or pacman on Linux; winget on Windows (installed when missing, never upgraded) |
 | `codegraph` | Its official installer, at the approved release |
-| `agent-reach` | `uv tool install` of the approved release, then `agent-reach setup` |
+| `agent-reach` | `uv tool install --managed-python` of the approved release (on a Python from uv, not the system one), then `agent-reach setup`; each default channel `agent-reach doctor` reports as not set up is a warning |
 
 ## Supported agents
 
