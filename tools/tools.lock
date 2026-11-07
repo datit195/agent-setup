@@ -2,6 +2,6 @@
 # comma-separated OSes the line applies to (macos, linux, wsl, windows, or all), and optionally release=<owner/repo>:
 # the tool is then an approved item. {tag} (e.g. v1.6.2) and {version} (1.6.2) in the install command are replaced with the
 # release approved on this machine (state/approved.json); a tool whose check output lacks that version is reinstalled.
-agent-reach	uv tool install --force "https://github.com/Panniantong/Agent-Reach/releases/download/{tag}/agent_reach-{version}-py3-none-any.whl" && agent-reach setup	agent-reach version	all	release=Panniantong/Agent-Reach
+agent-reach	uv tool install --force --managed-python "https://github.com/Panniantong/Agent-Reach/releases/download/{tag}/agent_reach-{version}-py3-none-any.whl" && agent-reach setup	agent-reach version	all	release=Panniantong/Agent-Reach
 codegraph	curl -fsSL https://raw.githubusercontent.com/colbymchenry/codegraph/{tag}/install.sh | CODEGRAPH_VERSION={tag} sh	codegraph --version	macos,linux,wsl	release=colbymchenry/codegraph
 codegraph	powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:CODEGRAPH_VERSION='{tag}'; irm https://raw.githubusercontent.com/colbymchenry/codegraph/{tag}/install.ps1 | iex"	codegraph --version || codegraph.cmd --version	windows	release=colbymchenry/codegraph

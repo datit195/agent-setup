@@ -588,4 +588,23 @@ pass "after the fixes: 0 changes, no plugin, skill or fetch warnings"
 run --yes --skip-tools --fix-duplicates "$@"
 grep -q '^0 change(s) made' "$out" || fail "--fix-duplicates made changes on a re-run"
 
+echo "== agent-reach default channels (stub agent-reach doctor)"
+# Only here on PATH: an installed agent-reach would be approved at its version.
+mkdir -p "$HOME/reach-bin" && cp "$repo/tests/agent-reach-stub.sh" "$HOME/reach-bin/agent-reach" && chmod +x "$HOME/reach-bin/agent-reach"
+reach_warnings() { (cd "$A" && PATH="$HOME/reach-bin:$PATH" ROOT="$A" bash -c '. lib/common.sh && . lib/tools.sh && agent_reach_check && echo "count=${#WARNINGS[@]}"' 2>&1); }
+r=$(reach_warnings)
+case $r in "count=0") ;; *) fail "a clean agent-reach doctor report gave warnings: $r" ;; esac
+printf '%s\n' '{"ok": true, "result": {"channels": [{"channel": "github", "level": "default", "status": "unverified", "problems": []},' \
+  '{"channel": "youtube", "level": "default", "status": "needs_setup", "problems": ["ffmpeg not installed: run `agent-reach add youtube`"]},' \
+  '{"channel": "bilibili", "level": "default", "status": "needs_setup", "problems": ["bili-cli not installed: run `agent-reach add bilibili`"]},' \
+  '{"channel": "twitter", "level": "optional", "status": "needs_setup", "problems": ["not logged in"]}]}}' | awk '{printf "%s\r\n", $0}' >"$HOME/.agent-reach-stub-doctor.json"
+r=$(reach_warnings)
+rm -f "$HOME/.agent-reach-stub-doctor.json"
+printf '%s\n' "$r" | grep -q '^WARN: agent-reach: default channel youtube: ffmpeg not installed: run `agent-reach add youtube` (fix:' || fail "youtube not reported: $r"
+printf '%s\n' "$r" | grep -q '^WARN: agent-reach: default channel bilibili: bili-cli' || fail "bilibili not reported: $r"
+printf '%s\n' "$r" | grep -q 'twitter' && fail "an optional channel was reported: $r"
+printf '%s\n' "$r" | grep -q $'\r' && fail "a warning kept a CR: $r"
+printf '%s\n' "$r" | grep -q '^count=2$' || fail "expected 2 warnings: $r"
+pass "agent-reach: each default channel that needs setup is a warning, a clean report gives none"
+
 echo "ALL CHECKS PASSED ($os)"
