@@ -302,7 +302,7 @@ Gemini CLI, GitHub Copilot, opencode, Devin, Amp, Kiro, Cline, Factory Droid, Ze
 
 - Cursor has no file for user rules, so you paste them; its imported hooks cannot add context.
 - The Cursor and Antigravity apps get no env and keep permissions in their UI; only their CLIs are configured.
-- The Codex, Cursor and Antigravity setups are checked by the install test, not yet against real installs.
+- The Cursor and Antigravity setups are checked by the install test, not yet against real installs. The Codex setup was also checked against a real Codex CLI 0.167.0 on macOS, except the hooks running in a live session, which needs a login (see [Reference](docs/reference.md#codex)).
 - Some Windows config paths and the `codegraph` launcher on Windows are not verified.
 - Cursor installs plugins only from its UI, so it gets vendored skills; Antigravity installs plugins from GitHub only when the repo has an Antigravity manifest (only `superpowers` has one).
 
