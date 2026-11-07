@@ -100,6 +100,31 @@ _codex_catalog() {
 _codex_repoint() { codex plugin marketplace remove "$1" </dev/null >/dev/null && codex plugin marketplace add "$2" </dev/null >/dev/null; }
 _codex_reinstall() { codex plugin remove "$1" </dev/null >/dev/null; codex plugin add "$1" </dev/null; }
 
+# A pinned local catalog in build/codex-marketplaces/ for a marketplace that
+# core/plugins.lock no longer uses (superpowers-dev, renamed superpowers) is
+# the installer's own: its plugins, the marketplace and the catalog are
+# removed, so the new id is installed without a duplicate. Updates the
+# installed and mkts lists of codex_plugins.
+_codex_drop_old_catalogs() {
+  local wanted base m s o
+  wanted=$(plugin_ids codex | cut -f3 | sed 's/.*@//')
+  base="$ROOT/build/codex-marketplaces"
+  while IFS=$'\t' read -r m s <&3; do
+    [ -n "$m" ] || continue
+    case $s in "$base"/* | "$(native_path "$base")"/*) ;; *) continue ;; esac
+    ! printf '%s\n' "$wanted" | grep -qx "$m" || continue
+    for o in $(printf '%s' "$installed" | jq -r --arg m "$m" '.[] | select((.pluginId | sub(".*@"; "")) == $m) | .pluginId' | tr -d '\r'); do
+      act "codex: remove plugin $o (from the old pinned catalog $m)" codex plugin remove "$o"
+    done
+    act "codex: remove plugin marketplace $m (old pinned catalog)" codex plugin marketplace remove "$m"
+    act "remove build/codex-marketplaces/$m (old pinned catalog)" rm -rf "$base/$m"
+    installed=$(printf '%s' "$installed" | jq -c --arg m "$m" 'map(select((.pluginId | sub(".*@"; "")) != $m))')
+    mkts=$(printf '%s\n' "$mkts" | awk -F '\t' -v m="$m" '$1 != m')
+  done 3<<EOF
+$mkts
+EOF
+}
+
 # Install every core/plugins.lock plugin with a codex= entry natively, from a
 # local catalog in build/codex-marketplaces/<marketplace>/ that pins it to
 # the approved commit. Local marketplaces are never upgraded by Codex (it
@@ -121,6 +146,7 @@ codex_plugins() {
   fi
   mkts=$(codex plugin marketplace list --json </dev/null 2>/dev/null |
     jq -r '.marketplaces[]? | "\(.name)\t\(.marketplaceSource.source // .source // .root // "")"' 2>/dev/null | tr -d '\r' || true)
+  _codex_drop_old_catalogs
   while IFS=$'\t' read -r name repo id <&3; do
     [ -n "$name" ] || continue
     mkt=${id#*@}
@@ -129,7 +155,7 @@ codex_plugins() {
       warn "codex: $(repo_item "$repo") has no approved version; Codex gets the vendored copy of $name"
       continue
     fi
-    others=$(printf '%s' "$installed" | jq -r --arg n "$name" --arg id "$id" '.[] | select(.name == $n and .pluginId != $id) | .pluginId')
+    others=$(printf '%s' "$installed" | jq -r --arg n "$name" --arg id "$id" '.[] | select(.name == $n and .pluginId != $id) | .pluginId' | tr -d '\r')
     if [ -n "$others" ]; then
       if [ "$FIX_DUPLICATES" != 1 ]; then
         native_add codex "$name"

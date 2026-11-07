@@ -101,7 +101,9 @@ printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","co
 # What earlier agent-setup versions left behind, to be migrated: playwright
 # pinned to 0.0.83 (Claude Code, Cursor) or at @latest (Codex); harness
 # installed from a local pinned catalog in build/claude-marketplaces/ (with
-# plugin data); taste-skill in Codex from the author's Git marketplace; a
+# plugin data); taste-skill in Codex from the author's Git marketplace;
+# superpowers in Codex as superpowers@superpowers-dev from an old pinned
+# local catalog in build/codex-marketplaces/superpowers-dev/; a
 # skill link into an old vendor/<repo>@<sha> dir; and a link in ~/.cursor/skills
 # to a skill of a plugin Codex has natively (now in ~/.agents/skills).
 old_pw='["-y","@playwright/mcp@0.0.83"]'
@@ -118,6 +120,11 @@ claude plugin install harness@harness-marketplace >/dev/null
 mkdir -p "$HOME/.claude/plugins/data/harness-harness-marketplace" && echo mine >"$HOME/.claude/plugins/data/harness-harness-marketplace/keep"
 codex plugin marketplace add Leonxlnx/taste-skill >/dev/null
 codex plugin add taste-skill@taste-skill >/dev/null
+oldcat="$A/build/codex-marketplaces/superpowers-dev"
+mkdir -p "$oldcat/.agents/plugins"
+printf '{"name":"superpowers-dev","plugins":[{"name":"superpowers","source":{"source":"url","url":"https://github.com/obra/superpowers.git","sha":"22f0b463e7a5e579904dd6211a520321035526f7"}}]}\n' >"$oldcat/.agents/plugins/marketplace.json"
+codex plugin marketplace add "$(if [ "$os" = windows ]; then cygpath -m "$oldcat"; else printf '%s' "$oldcat"; fi)" >/dev/null
+codex plugin add superpowers@superpowers-dev >/dev/null
 oldvendor="$A/vendor/wheresryan22__anatomy@1482e8469b0a9e0d8cc18ea2740a01423d29ae80"
 mkdir -p "$oldvendor" "$HOME/.agents/skills" && printf -- '---\nname: anatomy\n---\n' >"$oldvendor/SKILL.md"
 ln -s "$oldvendor" "$HOME/.agents/skills/anatomy"
@@ -142,6 +149,10 @@ grep -q 'change(s) made' "$out" || fail "no summary in first run"
 [ "$(approved harness)" = "$harness_head" ] || fail "harness: the installed Claude plugin commit was not approved"
 case $(approved playwright) in [0-9]*.[0-9]*) ;; *) fail "playwright not approved at a version: $(approved playwright)" ;; esac
 [ "$(vendor_head fake__one)" = "$(approved one)" ] || fail "vendor/fake__one is not at the approved commit"
+grep -q 'WARN: codex: superpowers is already installed' "$out" && fail "codex: the old superpowers-dev catalog was reported as a duplicate"
+grep -q '^plugin remove superpowers@superpowers-dev' "$HOME/.codex-stub.log" && grep -q '^plugin marketplace remove superpowers-dev' "$HOME/.codex-stub.log" ||
+  fail "codex: superpowers@superpowers-dev and its old pinned catalog were not removed"
+[ ! -e "$oldcat" ] || fail "build/codex-marketplaces/superpowers-dev was not removed"
 pass "first run: approves the installed versions, else the newest upstream (state/approved.json)"
 
 echo "== second run"
@@ -386,13 +397,15 @@ jq -e --arg a "@playwright/mcp@$pw" '.mcpServers.playwright.args == ["-y", $a]' 
 jq -e --arg a "@playwright/mcp@$pw" '.mcpServers.playwright.args == ["-y", $a]' "$HOME/.cursor/mcp.json" >/dev/null || fail "cursor: old playwright pin not moved to the approved version"
 pass "claude: authors' marketplaces with auto-update off (official too), pinned catalog migrated in place (data kept), playwright at the approved version"
 cstate="$HOME/.codex/stub-state.json"
-jq -e '.plugins | keys == ["fakeplug@fakeplug", "gsap-skills@gsap-skills", "harness@harness-marketplace", "superpowers@superpowers-dev", "taste-skill@taste-skill"]' "$cstate" >/dev/null || fail "codex: native plugins: $(cat "$cstate")"
+jq -e '.plugins | keys == ["fakeplug@fakeplug", "gsap-skills@gsap-skills", "harness@harness-marketplace", "superpowers@superpowers", "taste-skill@taste-skill"]' "$cstate" >/dev/null || fail "codex: native plugins: $(cat "$cstate")"
 jq -e '.marketplaces | to_entries | all(.value | test("build/codex-marketplaces/"))' "$cstate" >/dev/null || fail "codex: a marketplace is not a pinned local catalog: $(cat "$cstate")"
 [ "$(jq -r '.plugins["taste-skill@taste-skill"]' "$cstate")" = "$(approved taste-skill)" ] || fail "codex: taste-skill not reinstalled at the approved commit"
 [ "$(jq -r '.plugins["fakeplug@fakeplug"]' "$cstate")" = "$(approved plug)" ] || fail "codex: fakeplug not at the approved commit"
 grep -q 'plugin marketplace remove taste-skill' "$HOME/.codex-stub.log" || fail "codex: the Git marketplace was not replaced"
 jq -e --arg d "$A/vendor/obra__superpowers" '.superpowers.source | gsub("\\\\"; "/") | ascii_downcase | endswith("vendor/obra__superpowers")' "$HOME/.gemini/stub-plugins.json" >/dev/null || fail "antigravity: superpowers not installed from the vendor checkout: $(cat "$HOME/.gemini/stub-plugins.json")"
-pass "codex: every plugin from a pinned local catalog (Git marketplace migrated); antigravity: superpowers from the approved checkout"
+jq -e '.marketplaces | has("superpowers") and (has("superpowers-dev") | not)' "$cstate" >/dev/null || fail "codex: superpowers marketplace not renamed: $(cat "$cstate")"
+[ "$(jq -r '.plugins["superpowers@superpowers"]' "$cstate")" = "$(approved superpowers)" ] || fail "codex: superpowers not at the approved commit"
+pass "codex: every plugin from a pinned local catalog (Git marketplace and superpowers-dev migrated); antigravity: superpowers from the approved checkout"
 
 echo "== Codex loses a native plugin"
 codex plugin remove fakeplug@fakeplug >/dev/null
@@ -515,7 +528,10 @@ echo "== duplicates"
 jq '.["superpowers-dev"] = {source: {source: "github", repo: "obra/superpowers"}, installLocation: "/nonexistent"}' "$known" >"$known.tmp" && mv "$known.tmp" "$known"
 jq '.plugins["superpowers@superpowers-dev"] = [{scope: "user", installPath: "/nonexistent", version: "7.0.2", gitCommitSha: "22f0b463e7a5e579904dd6211a520321035526f7"}]
   | del(.plugins["superpowers@claude-plugins-official"])' "$inst_json" >"$inst_json.tmp" && mv "$inst_json.tmp" "$inst_json"
-jq '.plugins["gsap-skills@mine"] = "1.0.0" | del(.plugins["gsap-skills@gsap-skills"])' "$cstate" >"$cstate.tmp" && mv "$cstate.tmp" "$cstate"
+jq '.plugins["gsap-skills@mine"] = "1.0.0" | del(.plugins["gsap-skills@gsap-skills"])
+  | .marketplaces["superpowers-dev"] = "https://github.com/obra/superpowers.git"
+  | .plugins["superpowers@superpowers-dev"] = "1.0.0" | .plugins["superpowers@openai-curated"] = "1.0.0"
+  | del(.plugins["superpowers@superpowers"])' "$cstate" >"$cstate.tmp" && mv "$cstate.tmp" "$cstate"
 : >"$stublog"
 run --yes --skip-tools "$@"
 grep -q "WARN: claude: superpowers is already installed as superpowers@superpowers-dev, so superpowers@claude-plugins-official was not installed as a second copy. Switch with: claude plugin uninstall superpowers@superpowers-dev && claude plugin install superpowers@claude-plugins-official" "$out" ||
@@ -523,6 +539,9 @@ grep -q "WARN: claude: superpowers is already installed as superpowers@superpowe
 grep -q 'plugin install superpowers@' "$stublog" && fail "a second copy of superpowers was installed"
 grep -q "WARN: codex: gsap-skills is already installed as gsap-skills@mine" "$out" || fail "codex duplicate plugin not reported"
 jq -e '.plugins | has("gsap-skills@gsap-skills") | not' "$cstate" >/dev/null || fail "codex: a second copy of gsap-skills was installed"
+grep "WARN: codex: superpowers is already installed as" "$out" | grep 'superpowers@superpowers-dev' | grep -q 'superpowers@openai-curated' || fail "codex: superpowers from the Git marketplace and openai-curated not reported"
+jq -e '.plugins | has("superpowers@superpowers") | not' "$cstate" >/dev/null || fail "codex: a second copy of superpowers was installed"
+jq -e '.marketplaces["superpowers-dev"] | test("^https:")' "$cstate" >/dev/null || fail "codex: the author's Git marketplace was removed without --fix-duplicates"
 [ -f "$HOME/.agents/skills/gsap-core/SKILL.md" ] || fail "gsap-core left ~/.agents/skills"
 check_codex_skills ""
 pass "plugin installed from another marketplace: warned with the switch commands, no second copy (claude, codex)"
@@ -531,6 +550,7 @@ grep -q '^plugin uninstall superpowers@superpowers-dev' "$stublog" || fail "--fi
 grep -q '^plugin marketplace remove superpowers-dev' "$stublog" || fail "--fix-duplicates did not remove the emptied marketplace"
 jq -e '.plugins | has("superpowers@claude-plugins-official") and (has("superpowers@superpowers-dev") | not)' "$inst_json" >/dev/null || fail "superpowers was not switched"
 jq -e '.plugins | has("gsap-skills@gsap-skills") and (has("gsap-skills@mine") | not)' "$cstate" >/dev/null || fail "codex: gsap-skills was not switched"
+jq -e '.plugins | has("superpowers@superpowers") and (has("superpowers@superpowers-dev") or has("superpowers@openai-curated") | not)' "$cstate" >/dev/null || fail "codex: superpowers was not switched: $(cat "$cstate")"
 ls "$HOME"/.agent-setup-backups/*/.claude/plugins/installed_plugins.json >/dev/null 2>&1 || fail "plugin records were not backed up"
 pass "--fix-duplicates switches the plugins to the core/plugins.lock source (records backed up)"
 

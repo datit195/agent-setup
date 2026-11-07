@@ -8,7 +8,7 @@
 #                                  build/codex-marketplaces/<marketplace>/ that pins the plugin to the approved commit.
 #   antigravity=github             agy plugin install from the vendor checkout of the repo at the approved commit.
 # A core/skills.lock entry from the same repo is a copy of the plugin: an agent that has the plugin natively does not get it.
-superpowers	obra/superpowers	claude=superpowers@claude-plugins-official codex=superpowers@superpowers-dev antigravity=github
+superpowers	obra/superpowers	claude=superpowers@claude-plugins-official codex=superpowers@superpowers antigravity=github
 taste-skill	Leonxlnx/taste-skill	claude=taste-skill@taste-skill codex=taste-skill@taste-skill
 gsap-skills	greensock/gsap-skills	claude=gsap-skills@gsap-skills codex=gsap-skills@gsap-skills
 harness	revfactory/harness	claude=harness@harness-marketplace codex=harness@harness-marketplace
