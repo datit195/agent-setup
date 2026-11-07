@@ -87,10 +87,10 @@ Manifests each plugin repo ships (checked with `gh api`): superpowers has `.clau
 
 | Plugin | Claude Code | Codex | Cursor | Antigravity |
 |---|---|---|---|---|
-| superpowers (`obra/superpowers`) | `superpowers@claude-plugins-official` | `superpowers@superpowers-dev` (pinned local catalog) | vendored (`~/.cursor/skills` when Codex has the plugin) | `agy plugin install <vendor checkout>` |
-| taste-skill (`Leonxlnx/taste-skill`) | `taste-skill@taste-skill` | `taste-skill@taste-skill` (pinned local catalog) | vendored (same) | vendored (no Antigravity manifest) |
-| gsap-skills (`greensock/gsap-skills`) | `gsap-skills@gsap-skills` | `gsap-skills@gsap-skills` (pinned local catalog) | vendored (same) | vendored (no Antigravity manifest) |
-| harness (`revfactory/harness`) | `harness@harness-marketplace` | `harness@harness-marketplace` (pinned local catalog) | vendored (same) | vendored (no Antigravity manifest) |
+| superpowers (`obra/superpowers`) | `superpowers@claude-plugins-official` | `superpowers@superpowers-dev` (pinned local catalog) | vendored | `agy plugin install <vendor checkout>` |
+| taste-skill (`Leonxlnx/taste-skill`) | `taste-skill@taste-skill` | `taste-skill@taste-skill` (pinned local catalog) | vendored | vendored (no Antigravity manifest) |
+| gsap-skills (`greensock/gsap-skills`) | `gsap-skills@gsap-skills` | `gsap-skills@gsap-skills` (pinned local catalog) | vendored | vendored (no Antigravity manifest) |
+| harness (`revfactory/harness`) | `harness@harness-marketplace` | `harness@harness-marketplace` (pinned local catalog) | vendored | vendored (no Antigravity manifest) |
 
 Every other agent (Gemini CLI, Copilot, opencode, Kiro, ...) gets vendored skills.
 
@@ -109,7 +109,15 @@ Every other agent (Gemini CLI, Copilot, opencode, Kiro, ...) gets vendored skill
 - When the approved commit moves, the catalog is rewritten and the plugin reinstalled (`codex plugin remove`, then `codex plugin add`). A marketplace added earlier from the author's Git repo is replaced with the local catalog (`codex plugin marketplace remove`, then add) and its plugin reinstalled.
 - Codex reads plugin manifests from `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json` (`codex-rs/utils/plugins/src/plugin_namespace.rs`), so gsap-skills and harness install too.
 - Verified against a real Codex CLI 0.167.0 (Homebrew) on macOS in November 2026: the install from the pinned catalogs; the replacement of a marketplace added from the author's Git repo; the reinstall when the approved commit moves (the plugin cache then holds the new commit); the `config.toml` keys against `codex-rs/core/config.schema.json`; the skills Codex loads (app server `skills/list`, `codex debug prompt-input`); and `~/.codex/hooks.json` as the app server's `hooks/list` reads it (no warnings; untrusted until `/hooks`). `codex plugin marketplace list --json` gives the source as `marketplaceSource: {sourceType, source}`. Hooks running in a live session need a login and were run only by hand with Codex-shaped input.
-- Codex also reads `~/.agents/skills`, so a plugin Codex has natively (whichever marketplace it came from) is left out of that shared dir. Cursor then gets those skills in `~/.cursor/skills` (see [Duplicates](#duplicates)); the other agents that read the shared dir (Gemini CLI, Copilot, opencode, Amp, Devin, Cline, Droid, Zed, Crush) miss them. Kiro and Antigravity have their own dirs.
+- Codex also reads `~/.agents/skills`, which keeps every vendored skill for the other agents that read it (Cursor, Gemini CLI, Copilot, opencode, Amp, Devin, Cline, Droid, Zed, Crush). For each vendored skill of a plugin Codex has natively, the installer adds a `[[skills.config]]` entry to `~/.codex/config.toml` that turns that copy off for Codex:
+
+  ```toml
+  [[skills.config]] # agent-setup
+  path = "/Users/<name>/.agents/skills/brainstorming/SKILL.md"
+  enabled = false
+  ```
+
+  Codex resolves symlinks in both an entry's `path` and each loaded skill's path before it compares them (`skill_config_rule_selector` in `codex-rs/config/src/skills_config.rs`, `load_skills_under_root` in `codex-rs/ext/skills/src/loader/host.rs`), so the path through the link turns off the vendored copy while the plugin's own copy, under `~/.codex/plugins/cache/`, stays on. Only entries whose header carries the `# agent-setup` comment are the installer's: it rewrites them at the end of the file on every run and removes the ones for a plugin Codex no longer has; other entries are never changed, and a path the user already has an entry for is left to the user. Codex keeps the comment when it rewrites `config.toml`. Checked with Codex CLI 0.167.0 (app server `skills/list`): each skill is enabled once.
 
 ### Cursor
 
@@ -160,7 +168,7 @@ The CLI tools `gh`, `jq`, `uv` and `node` are installed when missing (Homebrew `
 
 **Plugins.** Before installing `<plugin>@<marketplace>`, the installer lists the installed plugins (`claude plugin list --json`, `codex plugin list --json`, `agy plugin list --json`). When the same plugin name is installed from another marketplace or source (for example `superpowers@superpowers-dev`), it does not install a second copy and warns with the commands to switch, such as `claude plugin uninstall <plugin>@<other> && claude plugin install <plugin>@<marketplace>`. With `--fix-duplicates` it uninstalls the other copy and installs the one in `core/plugins.lock`; for Claude Code it first backs up `~/.claude/settings.json` and the plugin records, and removes the other marketplace when no installed plugin is left in it (never one in `core/plugins.lock`).
 
-**Native plugin and vendored copy.** An agent that has a plugin natively never gets its vendored skills: Claude Code never links them into `~/.claude/skills`, Antigravity's `~/.gemini/config/skills` skips the plugins `agy` installed, and `~/.agents/skills` skips the plugins Codex has. Cursor reads `~/.agents/skills` but not Codex's plugins, so the skills left out there are linked into `~/.cursor/skills` instead (and removed from there once Codex no longer has the plugin). A link left from an earlier run is removed.
+**Native plugin and vendored copy.** An agent that has a plugin natively never gets its vendored skills: Claude Code never links them into `~/.claude/skills`, Antigravity's `~/.gemini/config/skills` skips the plugins `agy` installed, and Codex turns its copies in the shared `~/.agents/skills` off in `config.toml` (see [Codex](#codex)), so the other agents that read that dir keep them. A link left from an earlier run is removed, including the links older versions made in `~/.cursor/skills` for the plugins Codex has.
 
 **Skills.** Each focus agent's adapter lists the skill folders in every directory the agent reads and warns when a name appears more than once and at least one copy is not managed by agent-setup (a managed copy is a link this run made, or a link into this repo in a directory this run did not link into). It also catches an unmanaged folder with the same name as a managed skill. The directories checked:
 
@@ -272,8 +280,8 @@ Anything the installer replaces or edits is first saved under `~/.agent-setup-ba
 - The Linux and Windows package-manager installs are exercised in CI only as a dry run.
 - Plugins: the shape of `agy plugin list --json` is read loosely and unverified.
 - The official Claude marketplace can lag the superpowers repo (7.0.0 against 7.0.2 in November 2026), and every agent follows the commit it offers.
-- When Codex has a plugin natively, the agents other than Cursor that read `~/.agents/skills` lose its vendored skills (see [Codex](#codex)).
-- Cursor may also import Claude Code's installed plugins (its third-party import setting); if it does, the plugin skills linked into `~/.cursor/skills` show up twice there. Unverified.
+- Cursor may also import Claude Code's installed plugins (its third-party import setting); if it does, those plugins' skills show up twice there, next to their vendored copies in `~/.agents/skills`. Unverified.
+- Turning one of the disabled vendored skills back on in Codex removes its `[[skills.config]]` entry; the next install run adds it again.
 - The Antigravity install from a local directory and the Antigravity `SessionStart` hook follow the docs and source but were only run against stub CLIs, not a real Antigravity install.
 - Cursor installs plugins only through its UI; plugins you install there are not seen by the duplicate check.
 - Links to removed skills or rules are not cleaned up; delete them by hand (links to plugin skills an agent now has natively are removed).

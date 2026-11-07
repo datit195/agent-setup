@@ -29,24 +29,6 @@ codex_installed() {
   codex plugin list --json </dev/null 2>/dev/null | jq -c '[.installed[]? | select(.installed != false)]' 2>/dev/null | tr -d '\r' || true
 }
 
-# Record the plugins Codex already has (any marketplace), so the shared skills
-# dir, which Codex reads, skips their vendored copies. Once per run; the Codex
-# adapter records its installs itself.
-CODEX_SCANNED=0
-codex_scan_native() {
-  local installed name
-  [ "$CODEX_SCANNED" = 0 ] || return 0
-  CODEX_SCANNED=1
-  installed=$(codex_installed)
-  [ -n "$installed" ] || return 0
-  while IFS=$'\t' read -r name _; do
-    [ -n "$name" ] || continue
-    if printf '%s' "$installed" | jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null 2>&1; then
-      native_add codex "$name"
-    fi
-  done < <(plugin_ids codex)
-}
-
 # Where Claude Code keeps its plugin records.
 claude_plugins_dir() { printf '%s/plugins' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
 

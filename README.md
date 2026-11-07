@@ -208,7 +208,7 @@ The last four sources above are also plugins (`core/plugins.lock`). Each agent t
 | `gsap-skills` | `gsap-skills@gsap-skills` | `gsap-skills@gsap-skills` | vendored skills | vendored skills |
 | `harness` | `harness@harness-marketplace` | `harness@harness-marketplace` | vendored skills | vendored skills |
 
-Every plugin stays at its approved version: auto-update is off, Codex installs from local catalogs pinned to the approved commit, and Cursor gets the vendored skills of the plugins Codex has natively in `~/.cursor/skills`.
+Every plugin stays at its approved version: auto-update is off, and Codex installs from local catalogs pinned to the approved commit. The shared `~/.agents/skills` keeps every vendored skill for the agents that read it; Codex reads it too, so the installer turns its copies of the plugins Codex has natively off in `~/.codex/config.toml` (`[[skills.config]]` entries marked `# agent-setup`).
 
 ### MCP servers
 

@@ -9,6 +9,12 @@ is exactly `key = <one of "old">` (a value an older agent-setup wrote) is
 replaced with the new value. Prints the resulting file
 on stdout (unchanged when nothing is missing); the caller writes it.
 
+An item {"array": [...], "marker": "...", "entries": [{...}, ...]} manages
+array-of-tables entries: every `[[array]] # marker` block (the header and
+the `key = value` lines right after it) is removed, and one such block per
+entry is written at the end of the file. Unmarked entries are never changed;
+an entry whose "path" an unmarked line already sets is left out.
+
 Python 3.9+ without third-party modules: a line scanner finds tables and keys;
 when tomllib (3.11+) is available it also checks presence and validates the
 result. Keys in tables that exist only implicitly (dotted keys or inline
@@ -53,8 +59,9 @@ def fmt(v):
 
 
 def scan(lines):
-    """Return (headers {table: [first line, end line]}, keys set, tables set)."""
-    headers, keys, tables = {}, set(), set()
+    """Return (headers {table: [first line, end line]}, keys set, tables set,
+    array-of-tables header lines)."""
+    headers, keys, tables, arrays = {}, set(), set(), []
     cur, depth, mstr = (), 0, None
     for i, line in enumerate(lines):
         if mstr or depth > 0:
@@ -76,6 +83,7 @@ def scan(lines):
             continue
         if ARRAY_HEADER.match(line):
             cur = ("[[array]]", str(i))
+            arrays.append(i)
             continue
         m = KEY.match(line)
         if m:
@@ -94,7 +102,7 @@ def scan(lines):
                 headers[cur][1] = i + 1
         elif line.strip() and cur in headers:
             headers[cur][1] = i + 1
-    return headers, keys, tables
+    return headers, keys, tables, arrays
 
 
 def parsed_has(data, path):
@@ -106,6 +114,30 @@ def parsed_has(data, path):
     return True
 
 
+def managed_blocks(lines, item):
+    """Remove the marked [[array]] blocks of ITEM from LINES; return the new blocks."""
+    header = "[[%s]] # %s" % (".".join(fmt_key(p) for p in item["array"]), item["marker"])
+    kept, i = [], 0
+    while i < len(lines):
+        if lines[i].strip() == header:
+            i += 1
+            while i < len(lines) and KEY.match(lines[i]) and not HEADER.match(lines[i]):
+                i += 1
+            while kept and not kept[-1].strip():
+                kept.pop()
+            continue
+        kept.append(lines[i])
+        i += 1
+    lines[:] = kept
+    blocks = []
+    for entry in item["entries"]:
+        if "path" in entry and any(KEY.match(l) and l.split("=", 1)[1].strip() == fmt(entry["path"])
+                                   and split_key(KEY.match(l).group(1)) == ("path",) for l in lines):
+            continue
+        blocks.append([header] + ["%s = %s" % (fmt_key(k), fmt(v)) for k, v in entry.items()])
+    return blocks
+
+
 def main():
     path = sys.argv[1]
     try:
@@ -114,11 +146,16 @@ def main():
     except FileNotFoundError:
         text = ""
     spec = json.loads(sys.stdin.buffer.read())
+    arrays = [item for item in spec if "array" in item]
+    spec = [item for item in spec if "array" not in item]
     data = tomllib.loads(text) if tomllib else None
     lines = text.split("\n")
     if lines and lines[-1] == "":
         lines.pop()
-    headers, keys, tables = scan(lines)
+    blocks = []
+    for item in arrays:
+        blocks.extend(managed_blocks(lines, item))
+    headers, keys, tables, arrays = scan(lines)
 
     def exists(p):
         return p in keys or p in tables or (data is not None and parsed_has(data, p))
@@ -154,7 +191,8 @@ def main():
             new_tables.setdefault(table, []).append(entry)
 
     out = []
-    first_header = min([h[0] for h in headers.values()] or [len(lines)])
+    # Top-level keys go before the first table or array-of-tables header.
+    first_header = min([h[0] for h in headers.values()] + arrays or [len(lines)])
     for i, line in enumerate(lines):
         if i == first_header and top:
             while out and not out[-1].strip():
@@ -181,6 +219,10 @@ def main():
             out.append("")
         out.append("[%s]" % ".".join(fmt_key(p) for p in table))
         out.extend(entries)
+    for block in blocks:
+        if out and out[-1].strip():
+            out.append("")
+        out.extend(block)
     result = "\n".join(out) + "\n" if out else ""
     if tomllib:
         tomllib.loads(result)  # raises on a broken result; the caller keeps the file
