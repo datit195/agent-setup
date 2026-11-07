@@ -203,7 +203,7 @@ The last four sources above are also plugins (`core/plugins.lock`). Each agent t
 
 | Plugin | Claude Code | Codex | Antigravity | Cursor and the rest |
 |---|---|---|---|---|
-| `superpowers` | `superpowers@claude-plugins-official` | `superpowers@superpowers-dev` | `agy plugin install` from the approved checkout | vendored skills |
+| `superpowers` | `superpowers@claude-plugins-official` | `superpowers@superpowers` (the author's plugin from a local pinned catalog) | `agy plugin install` from the approved checkout | vendored skills |
 | `taste-skill` | `taste-skill@taste-skill` | `taste-skill@taste-skill` | vendored skills | vendored skills |
 | `gsap-skills` | `gsap-skills@gsap-skills` | `gsap-skills@gsap-skills` | vendored skills | vendored skills |
 | `harness` | `harness@harness-marketplace` | `harness@harness-marketplace` | vendored skills | vendored skills |
