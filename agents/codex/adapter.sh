@@ -18,6 +18,9 @@ install() {
 # (on-request approvals reviewed by the auto reviewer, workspace-write sandbox
 # without network). env comes from shell/env.sh; MCP servers from
 # core/mcp.json ("autoApprove" -> default_tools_approval_mode = "auto").
+# The vendored copies in ~/.agents/skills of the plugins Codex has natively
+# are turned off with [[skills.config]] entries marked "# agent-setup", which
+# the installer adds and removes itself (other entries are never touched).
 codex_config() {
   local file="$HOME/.codex/config.toml" py spec cur="" new
   if ! py=$(python_cmd); then
@@ -25,7 +28,7 @@ codex_config() {
     if has_cmd codex; then mcp_each codex_mcp; else warn "codex: CLI not found; MCP servers skipped"; fi
     return 0
   fi
-  spec=$(jq -n --slurpfile m "$MCP_JSON" --argjson env "$(shared_env_json)" '
+  spec=$(jq -n --slurpfile m "$MCP_JSON" --argjson env "$(shared_env_json)" --argjson dups "$(codex_dup_skills)" '
     [{table: [], key: "approval_policy", value: "on-request"},
      {table: [], key: "sandbox_mode", value: "workspace-write"},
      {table: [], key: "approvals_reviewer", value: "auto_review"}]
@@ -35,7 +38,8 @@ codex_config() {
            {table: $t, key: "args", value: ($s.args // []), new_table: true},
            (select(($s.oldArgs // []) != []) | {table: $t, key: "args", value: ($s.args // []), old: $s.oldArgs}),
            (select(($s.env // {}) != {}) | {table: $t, key: "env", value: $s.env, new_table: true}),
-           (select($s.autoApprove == true) | {table: $t, key: "default_tools_approval_mode", value: "auto"}))]')
+           (select($s.autoApprove == true) | {table: $t, key: "default_tools_approval_mode", value: "auto"}))]
+    + [{array: ["skills", "config"], marker: "agent-setup", entries: [$dups[] | {path: ., enabled: false}]}]')
   # shellcheck disable=SC2086
   if ! new=$(printf '%s' "$spec" | $py -I "$(native_path "$ROOT/lib/toml_set.py")" "$(native_path "$file")"); then
     warn "codex: could not update $(pretty "$file") (see the error above); left unchanged"
@@ -44,7 +48,25 @@ codex_config() {
   [ -f "$file" ] && cur=$(cat "$file")
   [ "$cur" = "$new" ] && return 0
   backup_copy_once "$file"
-  act "update $(pretty "$file") (permissions, env, MCP servers)" _write_file "$file" "$new"
+  act "update $(pretty "$file") (permissions, env, MCP servers, skills)" _write_file "$file" "$new"
+}
+
+# The SKILL.md paths in ~/.agents/skills of the vendored copies of plugins
+# Codex has natively, as a sorted JSON array. Codex resolves symlinks in both
+# a [[skills.config]] path and a loaded skill's path before it compares them
+# (codex-rs/config/src/skills_config.rs, ext/skills/src/loader/host.rs), so
+# the path through the link matches; the plugin's own copy has another path.
+codex_dup_skills() {
+  local name src skip plugin
+  while IFS=$'\t' read -r name src skip plugin; do
+    [ -n "$name" ] && [ -n "$plugin" ] || continue
+    case ",$skip," in *",shared,"*) continue ;; esac
+    [ ! -d "$ROOT/core/skills/$name" ] && native_has codex "$plugin" || continue
+    native_path "$HOME/.agents/skills/$name/SKILL.md"
+    printf '\n'
+  done <<EOF | jq -R -s -c 'split("\n") | map(select(. != "")) | sort'
+$VENDORED_SKILLS
+EOF
 }
 
 # Used only without Python (config.toml is edited directly otherwise).
@@ -88,7 +110,6 @@ _codex_reinstall() { codex plugin remove "$1" </dev/null >/dev/null; codex plugi
 # --fix-duplicates removes the other copy).
 codex_plugins() {
   local installed mkts name repo id mkt others o sha dir file cat src fresh
-  CODEX_SCANNED=1
   if ! has_cmd codex; then
     log "NOTE: codex CLI not found; plugins come as vendored skills in ~/.agents/skills"
     return 0

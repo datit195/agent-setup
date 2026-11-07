@@ -19,10 +19,22 @@ install() {
     fi
   fi
   shared_skills
-  link_codex_native_skills "$HOME/.cursor/skills" cursor
+  cursor_old_skill_links
   check_skill_dups cursor "$HOME/.agents/skills" "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.cursor/skills"
   mcp_merge_file "$HOME/.cursor/mcp.json" '.mcpServers' '{type: "stdio", command: $c, args: $a, env: $e}'
   cursor_cli_config
+}
+
+# Older versions linked the vendored skills of the plugins Codex has natively
+# into ~/.cursor/skills; ~/.agents/skills has them now, so those links go.
+cursor_old_skill_links() {
+  local name src skip plugin
+  while IFS=$'\t' read -r name src skip plugin; do
+    [ -n "$name" ] && [ -n "$plugin" ] || continue
+    unlink_managed "$src" "$HOME/.cursor/skills/$name" "the shared skills dir has it"
+  done <<EOF
+$VENDORED_SKILLS
+EOF
 }
 
 # The CLI config: $CURSOR_CONFIG_DIR, else $XDG_CONFIG_HOME/cursor on Linux

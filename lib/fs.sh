@@ -110,17 +110,11 @@ link_each() {
 VENDORED_SKILLS=""
 SKILL_DIRS_DONE=$'\n'
 
-# _native_for AGENT PLUGIN: does AGENT (or, for "shared", an agent that reads
-# the shared skills dir: Codex) have PLUGIN natively?
-_native_for() {
-  [ -n "$2" ] || return 1
-  if [ "$1" = shared ]; then codex_scan_native; native_has codex "$2"; else native_has "$1" "$2"; fi
-}
-
 # link_skills DEST_DIR [AGENT]: link every own skill and every vendored skill
 # into DEST_DIR/<name>, except vendored skills whose lock entry skips AGENT and
 # copies of a plugin AGENT has natively (a link left from an earlier run is
-# removed).
+# removed). The shared dir ("shared") always gets every vendored skill; Codex
+# turns off its copies of the plugins it has natively in config.toml.
 link_skills() {
   local dest=$1 agent=${2:-} d name src skip plugin seen=$'\n'
   in_list "$SKILL_DIRS_DONE" "$dest" && return 0
@@ -134,7 +128,7 @@ link_skills() {
   while IFS=$'\t' read -r name src skip plugin; do
     [ -n "$name" ] || continue
     case ",$skip," in *",$agent,"*) [ -n "$agent" ] && continue ;; esac
-    if _native_for "$agent" "$plugin"; then
+    if [ -n "$plugin" ] && native_has "$agent" "$plugin"; then
       unlink_managed "$src" "$dest/$name"
       continue
     fi
@@ -149,27 +143,8 @@ $VENDORED_SKILLS
 EOF
 }
 
-# The shared skills dir read by most agents (Codex among them).
+# The shared skills dir read by most agents (Codex and Cursor among them).
 shared_skills() { link_skills "$HOME/.agents/skills" shared; }
-
-# link_codex_native_skills DEST AGENT: the shared skills dir leaves out the
-# vendored copies of plugins Codex has natively. Link those into DEST, a dir
-# only AGENT (Cursor) reads, so it still gets them; remove such a link once
-# Codex no longer has the plugin (the shared dir then has the copy).
-link_codex_native_skills() {
-  local dest=$1 agent=$2 name src skip plugin
-  while IFS=$'\t' read -r name src skip plugin; do
-    [ -n "$name" ] && [ -n "$plugin" ] || continue
-    case ",$skip," in *",$agent,"*) continue ;; esac
-    if _native_for shared "$plugin"; then
-      link "$src" "$dest/$name"
-    else
-      unlink_managed "$src" "$dest/$name" "the shared skills dir has it"
-    fi
-  done <<EOF
-$VENDORED_SKILLS
-EOF
-}
 
 # The shared instruction file every agent links to.
 link_instructions() { link "$ROOT/build/AGENTS.full.md" "$1"; }

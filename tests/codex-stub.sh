@@ -5,7 +5,8 @@
 # a local dir is named by its .agents/plugins/marketplace.json; one added from
 # owner/repo is named like the codex= ids in core/plugins.lock. A plugin from
 # a local catalog is installed at the commit its source pins (its version is
-# that commit); other plugins at STUB_VERSION (default 1.0.0).
+# that commit); other plugins at STUB_VERSION (default 1.0.0). `plugin add`
+# of the id in STUB_FAIL_ADD fails.
 set -euo pipefail
 f="$HOME/.codex/stub-state.json" lock="$HOME/.agent-setup/core/plugins.lock"
 state() { cat "$f" 2>/dev/null || printf '{"marketplaces":{},"plugins":{},"mcp":[]}'; }
@@ -22,6 +23,7 @@ case "$1 $2" in
   "plugin add")
     logcmd "$@"
     id=$3 mkt=${3#*@}
+    [ "$id" != "${STUB_FAIL_ADD:-}" ] || { echo "Error: failed to install $id" >&2; exit 1; }
     src=$(state | jq -r --arg m "$mkt" '.marketplaces[$m] // empty')
     [ -n "$src" ] || { echo "Error: marketplace \`$mkt\` not found" >&2; exit 1; }
     v=$ver

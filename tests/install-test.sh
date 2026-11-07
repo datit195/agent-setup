@@ -91,7 +91,7 @@ vendor_head() { git -C "$A/vendor/$1" rev-parse HEAD; }
 export XDG_CONFIG_HOME="$HOME/.xdg-config"
 if [ "$os" = linux ]; then cursor_cfg="$XDG_CONFIG_HOME/cursor/cli-config.json"; else cursor_cfg="$HOME/.cursor/cli-config.json"; fi
 mkdir -p "$HOME/.codex" "$(dirname "$cursor_cfg")" "$HOME/.gemini/antigravity-cli" "$HOME/.claude"
-printf '# mine\nmodel = "o3"\nsandbox_mode = "read-only"\n\n[mcp_servers.codegraph]\ncommand = "my-codegraph"\n' >"$HOME/.codex/config.toml"
+printf '# mine\nmodel = "o3"\nsandbox_mode = "read-only"\n\n[[skills.config]]\nname = "mine"\nenabled = false\n\n[mcp_servers.codegraph]\ncommand = "my-codegraph"\n' >"$HOME/.codex/config.toml"
 printf '%s\n' '{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"echo user-hook"}]}]}}' >"$HOME/.codex/hooks.json"
 printf '%s\n' '{"approvalMode":"allowlist","permissions":{"allow":["Shell(ls)"]}}' >"$cursor_cfg"
 printf '%s\n' '{"agentMode":"manual","theme":"mine"}' >"$HOME/.gemini/antigravity-cli/settings.json"
@@ -101,8 +101,9 @@ printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","co
 # What earlier agent-setup versions left behind, to be migrated: playwright
 # pinned to 0.0.83 (Claude Code, Cursor) or at @latest (Codex); harness
 # installed from a local pinned catalog in build/claude-marketplaces/ (with
-# plugin data); taste-skill in Codex from the author's Git marketplace; and a
-# skill link into an old vendor/<repo>@<sha> dir.
+# plugin data); taste-skill in Codex from the author's Git marketplace; a
+# skill link into an old vendor/<repo>@<sha> dir; and a link in ~/.cursor/skills
+# to a skill of a plugin Codex has natively (now in ~/.agents/skills).
 old_pw='["-y","@playwright/mcp@0.0.83"]'
 printf '{"mcpServers":{"playwright":{"type":"stdio","command":"npx","args":%s,"env":{}}}}\n' "$old_pw" >"$HOME/.claude.json"
 printf '\n[mcp_servers.playwright]\ncommand = "npx"\nargs = ["-y", "@playwright/mcp@latest"]\n' >>"$HOME/.codex/config.toml"
@@ -120,6 +121,9 @@ codex plugin add taste-skill@taste-skill >/dev/null
 oldvendor="$A/vendor/wheresryan22__anatomy@1482e8469b0a9e0d8cc18ea2740a01423d29ae80"
 mkdir -p "$oldvendor" "$HOME/.agents/skills" && printf -- '---\nname: anatomy\n---\n' >"$oldvendor/SKILL.md"
 ln -s "$oldvendor" "$HOME/.agents/skills/anatomy"
+if [ "$os" != windows ]; then
+  mkdir -p "$HOME/.cursor/skills" && ln -s "$A/vendor/obra__superpowers/skills/brainstorming" "$HOME/.cursor/skills/brainstorming"
+fi
 rm -f "$HOME/.claude-stub.log" "$HOME/.codex-stub.log"
 
 echo "== dry run on a fresh HOME"
@@ -158,14 +162,16 @@ for f in .claude/CLAUDE.md .claude/rules/language.md .claude/rules/claude-extras
   .agents/skills/anatomy/SKILL.md .agents/skills/impeccable/SKILL.md .agents/skills/fake-one/SKILL.md \
   .gemini/config/skills/evolve/SKILL.md .gemini/config/skills/gsap-core/SKILL.md .kiro/skills/brainstorming/SKILL.md \
   .kiro/skills/taste-skill/SKILL.md .codex/AGENTS.md .gemini/GEMINI.md .config/opencode/AGENTS.md \
-  .cursor/skills/gsap-core/SKILL.md .cursor/skills/brainstorming/SKILL.md .cursor/skills/fake-plug/SKILL.md; do
+  .agents/skills/taste-skill/SKILL.md .agents/skills/gsap-core/SKILL.md .agents/skills/harness/SKILL.md \
+  .agents/skills/evolve/SKILL.md .agents/skills/brainstorming/SKILL.md .agents/skills/fake-plug/SKILL.md; do
   [ -f "$HOME/$f" ] || fail "missing ~/$f"
 done
-# No agent gets a skill twice: not from its native plugin and a vendored copy,
-# and Cursor gets Codex's native plugins' skills only in ~/.cursor/skills.
+# No agent gets a skill twice: not from its native plugin and a vendored copy
+# (Codex turns its copies in ~/.agents/skills off in config.toml, checked
+# below), and Cursor gets the shared skills only from ~/.agents/skills.
 for f in .claude/skills/taste-skill .claude/skills/brainstorming .claude/skills/harness .claude/skills/fake-plug \
-  .agents/skills/taste-skill .agents/skills/gsap-core .agents/skills/harness .agents/skills/evolve .agents/skills/brainstorming \
-  .agents/skills/fake-plug .gemini/config/skills/brainstorming .cursor/skills/anatomy; do
+  .gemini/config/skills/brainstorming .cursor/skills/anatomy .cursor/skills/brainstorming .cursor/skills/gsap-core \
+  .cursor/skills/fake-plug; do
   [ ! -e "$HOME/$f" ] && [ ! -L "$HOME/$f" ] || fail "~/$f exists; that agent would have the skill twice"
 done
 if [ -L "$HOME/.agents/skills/anatomy" ]; then
@@ -176,7 +182,7 @@ for d in "$A"/vendor/*; do
   case $(basename "$d") in *@*) fail "old pinned vendor dir left: $d" ;; esac
 done
 grep -q "skill 'gsap-core'\|skill 'brainstorming'" "$out" && fail "a skill duplicate was reported"
-pass "skills: per-repo vendor dirs, no skill twice per agent, Cursor gets the skills of Codex's native plugins"
+pass "skills: per-repo vendor dirs, every vendored skill in ~/.agents/skills, no skill twice per agent"
 grep -q 'allow_implicit_invocation: false' "$HOME/.agents/skills/impeccable/agents/openai.yaml" || fail "impeccable is not explicit-only for Codex"
 grep -q '^@~/.agent-setup/core/AGENTS.md' "$HOME/.claude/CLAUDE.md" || fail "~/.claude/CLAUDE.md is not the import stub"
 size=$(wc -c <"$A/build/AGENTS.full.md" | tr -d ' ')
@@ -210,9 +216,24 @@ for c in python3 python "py -3"; do
 done
 toml="$HOME/.codex/config.toml"
 cat "$toml"
+# The vendored skills of the plugins Codex has natively (every codex= plugin
+# here), which config.toml must turn off for Codex.
+codex_dups=$(awk -F '\t' 'NR == FNR { if ($0 !~ /^#/ && $3 ~ /codex=/) r[$2] = 1; next } $0 !~ /^#/ && ($2 in r) { print $1 }' \
+  "$A/core/plugins.lock" "$A/core/skills.lock" | LC_ALL=C sort)
+# check_codex_skills SKIP: config.toml turns off exactly those skills but SKIP
+# (a name or ""), in marked entries; the user's entry is kept.
+check_codex_skills() {
+  local want n
+  want=$(printf '%s\n' "$codex_dups" | grep -vx "${1:-none}" | sed "s|.*|$HOME_NATIVE/.agents/skills/&/SKILL.md|")
+  n=$(printf '%s\n' "$want" | grep -c .)
+  [ "$(grep -c '^\[\[skills\.config\]\] # agent-setup$' "$toml")" = "$n" ] || fail "codex config.toml: not $n marked [[skills.config]] entries"
+  [ "$(grep '^path = ' "$toml" | sed 's/^path = "\(.*\)"$/\1/' | LC_ALL=C sort)" = "$(printf '%s\n' "$want" | LC_ALL=C sort)" ] || fail "codex config.toml: wrong [[skills.config]] paths"
+  grep -q '^name = "mine"$' "$toml" || fail "codex config.toml: the user's [[skills.config]] entry was lost"
+}
+check_codex_skills ""
 if [ -n "$toml_py" ]; then
   # shellcheck disable=SC2086
-  $toml_py - "$(if [ "$os" = windows ]; then cygpath -m "$toml"; else printf '%s' "$toml"; fi)" "$pw" <<'EOF' || fail "codex config.toml check failed"
+  $toml_py - "$(if [ "$os" = windows ]; then cygpath -m "$toml"; else printf '%s' "$toml"; fi)" "$pw" "$(printf '%s\n' "$codex_dups" | grep -c .)" <<'EOF' || fail "codex config.toml check failed"
 import sys, tomllib
 c = tomllib.load(open(sys.argv[1], "rb"))
 assert c["model"] == "o3", "user model lost"
@@ -224,8 +245,11 @@ assert cg["command"] == "my-codegraph" and "args" not in cg, "user MCP server ch
 assert cg["default_tools_approval_mode"] == "auto"
 assert c["mcp_servers"]["playwright"]["args"] == ["-y", "@playwright/mcp@" + sys.argv[2]], "playwright @latest not moved to the approved version"
 assert "default_tools_approval_mode" not in c["mcp_servers"]["playwright"]
+sc = c["skills"]["config"]
+assert sc[0] == {"name": "mine", "enabled": False}, "user skills.config entry changed"
+assert len(sc) == 1 + int(sys.argv[3]) and all(e["enabled"] is False and e["path"].endswith("/SKILL.md") for e in sc[1:])
 EOF
-  pass "codex config.toml parses (tomllib via $toml_py), user values kept, keys added"
+  pass "codex config.toml parses (tomllib via $toml_py), user values kept, keys and skills.config entries added"
 else
   grep -q '^approval_policy = "on-request"' "$toml" && grep -q '^model = "o3"' "$toml" || fail "codex config.toml keys"
   echo "note: no Python with tomllib; config.toml checked with grep only"
@@ -370,6 +394,20 @@ grep -q 'plugin marketplace remove taste-skill' "$HOME/.codex-stub.log" || fail 
 jq -e --arg d "$A/vendor/obra__superpowers" '.superpowers.source | gsub("\\\\"; "/") | ascii_downcase | endswith("vendor/obra__superpowers")' "$HOME/.gemini/stub-plugins.json" >/dev/null || fail "antigravity: superpowers not installed from the vendor checkout: $(cat "$HOME/.gemini/stub-plugins.json")"
 pass "codex: every plugin from a pinned local catalog (Git marketplace migrated); antigravity: superpowers from the approved checkout"
 
+echo "== Codex loses a native plugin"
+codex plugin remove fakeplug@fakeplug >/dev/null
+export STUB_FAIL_ADD=fakeplug@fakeplug
+run --yes --skip-tools "$@"
+unset STUB_FAIL_ADD
+grep -q 'WARN: codex: could not install fakeplug@fakeplug' "$out" || fail "codex: the failed fakeplug install was not reported"
+check_codex_skills fake-plug
+[ -f "$HOME/.agents/skills/fake-plug/SKILL.md" ] || fail "fake-plug left ~/.agents/skills"
+run --yes --skip-tools "$@"
+check_codex_skills ""
+run --yes --skip-tools "$@"
+grep -q '^0 change(s) made' "$out" || fail "run after fakeplug came back made changes"
+pass "codex: the skills.config entries follow the plugins Codex has natively"
+
 echo "== upstream moves: nothing changes without approval"
 new_one=$(commit_to one) new_two=$(commit_to two) new_plug=$(commit_to plug)
 old_one=$(approved one) old_two=$(approved two) old_plug=$(approved plug)
@@ -485,7 +523,8 @@ grep -q "WARN: claude: superpowers is already installed as superpowers@superpowe
 grep -q 'plugin install superpowers@' "$stublog" && fail "a second copy of superpowers was installed"
 grep -q "WARN: codex: gsap-skills is already installed as gsap-skills@mine" "$out" || fail "codex duplicate plugin not reported"
 jq -e '.plugins | has("gsap-skills@gsap-skills") | not' "$cstate" >/dev/null || fail "codex: a second copy of gsap-skills was installed"
-[ ! -e "$HOME/.agents/skills/gsap-core" ] || fail "codex has gsap-skills natively, but the vendored copy came back"
+[ -f "$HOME/.agents/skills/gsap-core/SKILL.md" ] || fail "gsap-core left ~/.agents/skills"
+check_codex_skills ""
 pass "plugin installed from another marketplace: warned with the switch commands, no second copy (claude, codex)"
 run --yes --skip-tools --fix-duplicates "$@"
 grep -q '^plugin uninstall superpowers@superpowers-dev' "$stublog" || fail "--fix-duplicates did not uninstall the other copy"
