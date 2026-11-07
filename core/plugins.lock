@@ -1,0 +1,13 @@
+# Plugins, installed natively in every agent that can install them from their authors' sources and keep them updated.
+# No pins: each follows its upstream. One per line, tab-separated: plugin name, GitHub owner/repo, and space-separated
+# <agent>=<how> entries (an agent without an entry gets the plugin's skills as vendored copies, see core/skills.lock):
+#   claude=<plugin>@<marketplace>  Claude Code plugin id, the one the author recommends. The marketplace is added from the
+#                                  plugin's repo with auto-update on, except claude-plugins-official (Anthropic's, auto-updates).
+#   codex=<plugin>@<marketplace>   Codex plugin id. The marketplace is added from the plugin's repo (Codex refreshes it at
+#                                  startup), except openai-curated (OpenAI's, built in).
+#   antigravity=github             agy plugin install https://github.com/<repo>; install.sh reinstalls it to update it.
+# A core/skills.lock entry from the same repo is a copy of the plugin: an agent that has the plugin natively does not get it.
+superpowers	obra/superpowers	claude=superpowers@claude-plugins-official codex=superpowers@openai-curated antigravity=github
+taste-skill	Leonxlnx/taste-skill	claude=taste-skill@taste-skill codex=taste-skill@taste-skill
+gsap-skills	greensock/gsap-skills	claude=gsap-skills@gsap-skills codex=gsap-skills@gsap-skills
+harness	revfactory/harness	claude=harness@harness-marketplace codex=harness@harness-marketplace

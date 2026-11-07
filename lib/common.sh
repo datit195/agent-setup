@@ -35,6 +35,10 @@ act() {
   return 0
 }
 
+# changed DESCRIPTION: report a change something else already made (such as an
+# agent's own update command), and count it.
+changed() { CHANGES=$((CHANGES + 1)); printf '%s\n' "$*"; }
+
 has_cmd() { command -v "$1" >/dev/null 2>&1; }
 
 # Print the OS: macos, linux, wsl, windows (Git Bash / MSYS2 / Cygwin) or unknown.

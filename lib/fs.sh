@@ -72,8 +72,27 @@ link() {
     return 0
   fi
   if [ -L "$dest" ] && [ "$(readlink "$dest")" = "$src" ]; then return 0; fi
+  if _repo_link "$dest"; then
+    # Our own link to an older place in the repo (e.g. an old vendor dir): re-point it in one step.
+    act "re-link $(pretty "$dest") -> $(pretty "$src")" ln -sfn "$src" "$dest"
+    return 0
+  fi
   if [ -e "$dest" ] || [ -L "$dest" ]; then backup_move "$dest"; fi
   act "link $(pretty "$dest") -> $(pretty "$src")" _make_link "$src" "$dest"
+}
+
+# _repo_link PATH: is PATH a symlink into this repo?
+_repo_link() { [ -L "$1" ] && case $(readlink "$1") in "$ROOT"/*) true ;; *) false ;; esac; }
+
+# unlink_managed SRC DEST: remove DEST when it is this repo's link (in copy
+# mode: an identical copy of SRC, moved to the backups); anything else is left.
+unlink_managed() {
+  local src=$1 dest=$2
+  if _repo_link "$dest"; then
+    act "remove $(pretty "$dest") (the agent has the native plugin)" rm -f "$dest"
+  elif [ "$LINK_MODE" = copy ] && [ -d "$dest" ] && [ ! -L "$dest" ] && diff -rq -x .git "$src" "$dest" >/dev/null 2>&1; then
+    backup_move "$dest"
+  fi
 }
 
 # link_each DEST_DIR FILE...: link each existing FILE into DEST_DIR/<basename>.
@@ -86,14 +105,23 @@ link_each() {
 }
 
 # Vendored skills, filled by vendor_skills (lib/build.sh): lines
-# "name<TAB>dir<TAB>agents to skip (comma-separated)".
+# "name<TAB>dir<TAB>agents to skip (comma-separated)<TAB>plugin it copies".
 VENDORED_SKILLS=""
 SKILL_DIRS_DONE=$'\n'
 
+# _native_for AGENT PLUGIN: does AGENT (or, for "shared", an agent that reads
+# the shared skills dir: Codex) have PLUGIN natively?
+_native_for() {
+  [ -n "$2" ] || return 1
+  if [ "$1" = shared ]; then codex_scan_native; native_has codex "$2"; else native_has "$1" "$2"; fi
+}
+
 # link_skills DEST_DIR [AGENT]: link every own skill and every vendored skill
-# into DEST_DIR/<name>, except vendored skills whose lock entry skips AGENT.
+# into DEST_DIR/<name>, except vendored skills whose lock entry skips AGENT and
+# copies of a plugin AGENT has natively (a link left from an earlier run is
+# removed).
 link_skills() {
-  local dest=$1 agent=${2:-} d name src skip seen=$'\n'
+  local dest=$1 agent=${2:-} d name src skip plugin seen=$'\n'
   in_list "$SKILL_DIRS_DONE" "$dest" && return 0
   SKILL_DIRS_DONE="$SKILL_DIRS_DONE$dest"$'\n'
   for d in "$ROOT"/core/skills/*/; do
@@ -102,9 +130,13 @@ link_skills() {
     seen="$seen$name"$'\n'
     link "${d%/}" "$dest/$name"
   done
-  while IFS=$'\t' read -r name src skip; do
+  while IFS=$'\t' read -r name src skip plugin; do
     [ -n "$name" ] || continue
     case ",$skip," in *",$agent,"*) [ -n "$agent" ] && continue ;; esac
+    if _native_for "$agent" "$plugin"; then
+      unlink_managed "$src" "$dest/$name"
+      continue
+    fi
     if in_list "$seen" "$name"; then
       warn "skill name '$name' is both own and vendored; kept the own one"
       continue
@@ -116,8 +148,8 @@ $VENDORED_SKILLS
 EOF
 }
 
-# The shared skills dir read by most agents.
-shared_skills() { link_skills "$HOME/.agents/skills"; }
+# The shared skills dir read by most agents (Codex among them).
+shared_skills() { link_skills "$HOME/.agents/skills" shared; }
 
 # The shared instruction file every agent links to.
 link_instructions() { link "$ROOT/build/AGENTS.full.md" "$1"; }
