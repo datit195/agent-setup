@@ -6,7 +6,9 @@
 # writes the marketplace into extraKnownMarketplaces in user settings (without
 # autoUpdate) and refuses a source that disagrees with that entry.
 # STUB_VERSION (default 1.0.0) is the version every marketplace offers when it
-# is added or updated.
+# is added or updated; the commit it offers is the head of the plugin's repo
+# (git ls-remote, so a test can move it with a local upstream), or for the
+# official marketplace the commit Anthropic's real catalog pins.
 set -euo pipefail
 p="$HOME/.claude/plugins" known="$HOME/.claude/plugins/known_marketplaces.json" inst="$HOME/.claude/plugins/installed_plugins.json"
 settings="$HOME/.claude/settings.json" mcp="$HOME/.claude.json"
@@ -16,13 +18,26 @@ save() { local f=$1; shift; mkdir -p "$(dirname "$f")"; state "$f" | jq "$@" >"$
 logcmd() { printf '%s\n' "$*" >>"$HOME/.claude-stub.log"; }
 lock="$HOME/.agent-setup/core/plugins.lock"
 
+# head_of NAME REPO MARKET: the commit marketplace MARKET offers for plugin NAME.
+head_of() {
+  if [ "$3" = claude-plugins-official ]; then
+    curl -fsSL --max-time 15 https://raw.githubusercontent.com/anthropics/claude-plugins-official/HEAD/.claude-plugin/marketplace.json |
+      jq -r --arg n "$1" '[.plugins[] | select(.name == $n) | .source.sha // empty][0] // empty'
+  else
+    git ls-remote "https://github.com/$2.git" HEAD | awk 'NR == 1 { print $1 }'
+  fi
+}
+
 # catalog NAME LOC: write the marketplace catalog: every core/plugins.lock
-# plugin whose claude= id is in marketplace NAME, at STUB_VERSION.
+# plugin whose claude= id is in marketplace NAME, at STUB_VERSION and the
+# upstream head.
 catalog() {
+  local n r
   mkdir -p "$2/.claude-plugin"
   grep -v '^#' "$lock" | awk -F '\t' -v m="$1" '{ if (match($3, "claude=[^ ]*@" m "( |$)")) { s = substr($3, RSTART + 7, RLENGTH - 7); sub(/@.*/, "", s); print s "\t" $2 } }' |
+    while IFS=$'\t' read -r n r; do printf '%s\t%s\t%s\n' "$n" "$r" "$(head_of "$n" "$r" "$1")"; done |
     jq -Rn --arg n "$1" --arg v "${STUB_VERSION:-1.0.0}" \
-      '{name: $n, plugins: [inputs | split("\t") | {name: .[0], version: $v, source: {source: "github", repo: .[1]}}]}' >"$2/.claude-plugin/marketplace.json"
+      '{name: $n, plugins: [inputs | split("\t") | {name: .[0], version: $v, source: {source: "github", repo: .[1], sha: .[2]}}]}' >"$2/.claude-plugin/marketplace.json"
 }
 
 case "$1 $2" in
@@ -81,7 +96,7 @@ case "$1 $2" in
     logcmd "$@"
     dir="$p/cache/$mkt/$name/$ver"
     mkdir -p "$dir/skills/$name" && printf -- '---\nname: %s\n---\n' "$name" >"$dir/skills/$name/SKILL.md"
-    save "$inst" --arg id "$id" --arg d "$dir" --arg v "$ver" --arg s "$(printf '%s' "$id$ver" | cksum | cut -d' ' -f1)" \
+    save "$inst" --arg id "$id" --arg d "$dir" --arg v "$ver" --arg s "$(printf '%s' "$entry" | jq -r '.source.sha // empty')" \
       '.plugins[$id] = [{scope: "user", installPath: $d, version: $v, gitCommitSha: $s}]'
     save "$settings" --arg id "$id" '.enabledPlugins[$id] = true' ;;
   "plugin uninstall")

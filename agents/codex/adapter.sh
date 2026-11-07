@@ -25,7 +25,7 @@ codex_config() {
     if has_cmd codex; then mcp_each codex_mcp; else warn "codex: CLI not found; MCP servers skipped"; fi
     return 0
   fi
-  spec=$(jq -n --slurpfile m "$ROOT/core/mcp.json" --argjson env "$(shared_env_json)" '
+  spec=$(jq -n --slurpfile m "$MCP_JSON" --argjson env "$(shared_env_json)" '
     [{table: [], key: "approval_policy", value: "on-request"},
      {table: [], key: "sandbox_mode", value: "workspace-write"},
      {table: [], key: "approvals_reviewer", value: "auto_review"}]
@@ -65,20 +65,29 @@ codex_hooks() {
   log "NOTE: Codex runs new or changed hooks only after you trust them once: run /hooks in Codex"
 }
 
-CODEX_OFFICIAL_MARKETPLACE=openai-curated
+# _codex_catalog MARKET NAME REPO SHA: the local marketplace catalog that
+# pins plugin NAME to commit SHA of REPO (a Codex "url" plugin source with a
+# sha), as JSON.
+_codex_catalog() {
+  jq -n --arg m "$1" --arg n "$2" --arg u "$(gh_url "$3")" --arg s "$4" \
+    '{name: $m, plugins: [{name: $n, source: {source: "url", url: $u, sha: $s}}]}'
+}
 
-# _codex_versions: "id version" per installed plugin, for change detection.
-_codex_versions() { codex_installed | jq -r '.[] | "\(.pluginId) \(.version // "")"' 2>/dev/null | LC_ALL=C sort; }
+# _codex_repoint MARKET DIR: replace marketplace MARKET (added from another
+# source, such as the author's Git repo) with the local catalog DIR.
+_codex_repoint() { codex plugin marketplace remove "$1" </dev/null >/dev/null && codex plugin marketplace add "$2" </dev/null >/dev/null; }
+_codex_reinstall() { codex plugin remove "$1" </dev/null >/dev/null; codex plugin add "$1" </dev/null; }
 
-# Install every core/plugins.lock plugin with a codex= entry natively: its
-# marketplace added from the author's repo (openai-curated is built in), then
-# `codex plugin add`. Codex upgrades configured Git marketplaces and the
-# plugins installed from them on its own at startup; this run also upgrades
-# them now. A plugin Codex cannot install keeps its vendored copy in the
-# shared skills dir. A plugin already installed from another marketplace is
-# not installed twice (warning; --fix-duplicates removes the other copy).
+# Install every core/plugins.lock plugin with a codex= entry natively, from a
+# local catalog in build/codex-marketplaces/<marketplace>/ that pins it to
+# the approved commit. Local marketplaces are never upgraded by Codex (it
+# upgrades only Git marketplaces at startup), so nothing moves until the
+# approved commit does; the plugin is then reinstalled. A plugin Codex cannot
+# install keeps its vendored copy in the shared skills dir. A plugin already
+# installed from another marketplace is not installed twice (warning;
+# --fix-duplicates removes the other copy).
 codex_plugins() {
-  local installed mkts name repo id mkt others o before after any=0
+  local installed mkts name repo id mkt others o sha dir file cat src fresh
   CODEX_SCANNED=1
   if ! has_cmd codex; then
     log "NOTE: codex CLI not found; plugins come as vendored skills in ~/.agents/skills"
@@ -89,16 +98,17 @@ codex_plugins() {
     warn "codex: 'plugin list --json' failed; plugins come as vendored skills"
     return 0
   fi
-  mkts=$(codex plugin marketplace list --json </dev/null 2>/dev/null | jq -r '.marketplaces[]?.name' 2>/dev/null | tr -d '\r' || true)
+  mkts=$(codex plugin marketplace list --json </dev/null 2>/dev/null |
+    jq -r '.marketplaces[]? | "\(.name)\t\(.marketplaceSource.source // .source // .root // "")"' 2>/dev/null | tr -d '\r' || true)
   while IFS=$'\t' read -r name repo id <&3; do
     [ -n "$name" ] || continue
     mkt=${id#*@}
-    if printf '%s' "$installed" | jq -e --arg id "$id" 'any(.[]; .pluginId == $id)' >/dev/null; then
-      native_add codex "$name"
-      any=1
+    sha=$(approved "$(repo_item "$repo")")
+    if [ -z "$sha" ]; then
+      warn "codex: $(repo_item "$repo") has no approved version; Codex gets the vendored copy of $name"
       continue
     fi
-    others=$(printf '%s' "$installed" | jq -r --arg n "$name" '.[] | select(.name == $n) | .pluginId')
+    others=$(printf '%s' "$installed" | jq -r --arg n "$name" --arg id "$id" '.[] | select(.name == $n and .pluginId != $id) | .pluginId')
     if [ -n "$others" ]; then
       if [ "$FIX_DUPLICATES" != 1 ]; then
         native_add codex "$name"
@@ -109,29 +119,35 @@ codex_plugins() {
         act "codex: remove plugin $o (another copy of $name; plugins.lock uses $id)" codex plugin remove "$o"
       done
     fi
-    if [ "$mkt" = "$CODEX_OFFICIAL_MARKETPLACE" ] && ! codex plugin list --json --available </dev/null 2>/dev/null |
-      jq -e --arg id "$id" 'any(.available[]?; .pluginId == $id)' >/dev/null 2>&1; then
-      log "NOTE: codex: $id is not available yet (Codex syncs $mkt when it starts); Codex gets the vendored copy of $name until then"
-      continue
+
+    # The pinned local catalog and the marketplace that reads it.
+    dir="$ROOT/build/codex-marketplaces/$mkt"
+    file="$dir/.agents/plugins/marketplace.json"
+    cat=$(_codex_catalog "$mkt" "$name" "$repo" "$sha")
+    fresh=0
+    if [ ! -f "$file" ] || [ "$(jq -c . "$file" 2>/dev/null)" != "$(printf '%s' "$cat" | jq -c .)" ]; then
+      act "write build/codex-marketplaces/$mkt (pins $name to ${sha:0:12})" _write_file "$file" "$cat"
+      fresh=1
     fi
-    if [ "$mkt" != "$CODEX_OFFICIAL_MARKETPLACE" ] && ! in_list $'\n'"$mkts"$'\n' "$mkt"; then
-      act "codex: add plugin marketplace $mkt from $repo" codex plugin marketplace add "$repo"
-      mkts="$mkts"$'\n'"$mkt"
+    src=$(printf '%s\n' "$mkts" | awk -F '\t' -v m="$mkt" '$1 == m { print $2; exit }')
+    if ! printf '%s\n' "$mkts" | cut -f1 | grep -qx "$mkt"; then
+      act "codex: add plugin marketplace $mkt (pinned local catalog)" codex plugin marketplace add "$(native_path "$dir")"
+    elif [ "$src" != "$(native_path "$dir")" ] && [ "$src" != "$dir" ]; then
+      backup_copy_once "$HOME/.codex/config.toml"
+      act "codex: point plugin marketplace $mkt at the pinned local catalog (was ${src:-unknown})" _codex_repoint "$mkt" "$(native_path "$dir")"
+      fresh=1
     fi
-    act "codex: install plugin $id" codex plugin add "$id"
+
+    # The plugin, reinstalled when its pinned commit moved.
+    if ! printf '%s' "$installed" | jq -e --arg id "$id" 'any(.[]; .pluginId == $id)' >/dev/null; then
+      act "codex: install plugin $id (${sha:0:12})" codex plugin add "$id"
+    elif [ "$fresh" = 1 ]; then
+      act "codex: reinstall plugin $id at ${sha:0:12} (restart Codex to load it)" _codex_reinstall "$id"
+    fi
     if [ "$DRY_RUN" = 1 ] || codex_installed | jq -e --arg id "$id" 'any(.[]; .pluginId == $id)' >/dev/null 2>&1; then
       native_add codex "$name"
     else
       warn "codex: could not install $id; Codex gets the vendored copy of $name instead"
     fi
   done 3< <(plugin_ids codex)
-  [ "$any" = 1 ] || return 0
-  if [ "$DRY_RUN" = 1 ]; then
-    log "[dry-run] codex: would upgrade the plugin marketplaces (codex plugin marketplace upgrade)"
-    return 0
-  fi
-  before=$(_codex_versions)
-  codex plugin marketplace upgrade </dev/null >/dev/null 2>&1 || warn "codex: 'plugin marketplace upgrade' failed; plugins keep their installed version"
-  after=$(_codex_versions)
-  [ "$before" = "$after" ] || changed "codex: plugins updated: $(printf '%s' "$after" | tr '\n' ' ')(restart Codex to load them)"
 }

@@ -106,10 +106,12 @@ gh repo clone datit195/agent-setup ~/.agent-setup
 |---|---|
 | `--dry-run` | Print every action, change nothing |
 | `--agents claude,codex` | Only these agents. By default every detected agent is configured; a selected agent is configured even when it is not detected |
-| `--update` | Same as a plain run, kept for compatibility: every run already updates (see [Updating](#updating)) |
+| `--check` | List newer upstream versions of what is installed (`--json` for JSON, `--force` to check upstream now); see [Updates](#updates-you-approve-every-update) |
+| `--update [names\|all]` | Approve newer versions (asks per item; `--yes` approves the named ones) and install them |
+| `--snooze <names\|all>`, `--skip <name>@<version>` | Ask about an update again in 24 hours, or not for this version |
 | `--fix-duplicates` | Switch plugins installed from another marketplace or source to the one in `core/plugins.lock`; move unmanaged duplicate skills to the backups |
 | `--skip-tools` | Skip the package manager step (Homebrew, apt-get/dnf/pacman or winget) and `tools/tools.lock` |
-| `--yes` | Install missing tools without asking |
+| `--yes` | Install missing tools without asking; with `--update <names>`, approve them without asking |
 | `-h`, `--help` | Show help |
 
 ### 4. After the install
@@ -125,21 +127,36 @@ gh repo clone datit195/agent-setup ~/.agent-setup
 claude mcp list             # codegraph and playwright should be listed
 ```
 
-### Updating
+### Updates: you approve every update
 
-Nothing is pinned: every third-party skill, plugin, MCP server and tool follows its upstream source. `core/skills.lock` and `core/plugins.lock` only say where each one comes from.
+Nothing agent-setup installed changes without your yes. Every third-party skill repo, plugin, MCP server and CLI tool has an **approved version on each machine**, kept in `~/.agent-setup/state/approved.json` (local, never committed). The first install approves what is already installed, or else the newest upstream version. After that, `install.sh` installs exactly the approved versions and never moves past them, and the agents' own auto-update is off (Claude Code marketplaces have `autoUpdate: false`, Codex plugins come from pinned local catalogs, Antigravity's plugin is reinstalled only after an approval).
 
-- **Plugins update natively where the agent supports it.** Claude Code installs the plugins from their authors' marketplaces with auto-update turned on, and Codex refreshes its plugin marketplaces at startup. Both pick up new versions by themselves.
-- **Everything else is refreshed when you run `install.sh`:** each run fetches the latest of every vendored skill and runs the agents' own plugin update commands. There is no background or scheduled job.
+When an author publishes something newer, every agent tells you at the start of a session (a session-start hook, checked against upstream at most once a day, silent when nothing is pending):
 
-```sh
-git -C ~/.agent-setup pull && ~/.agent-setup/install.sh
+```text
+Newer upstream versions exist for items agent-setup installed on this machine:
+- superpowers: bb92a7774141 -> 22f0b463e7a5 https://github.com/obra/superpowers/compare/bb92a7774141...22f0b463e7a5
 ```
 
-> [!WARNING]
-> Third-party code now updates without review: a new commit of a skill or plugin reaches your agents on the next auto-update or `install.sh` run. Only keep sources you trust in the lock files.
+The agent then asks you, in your language, what to do with each item, and runs the matching command after you answer:
 
-Per-agent details and sources: [plugins per agent](docs/reference.md#plugins-per-agent).
+| Your answer | Command the agent runs |
+|---|---|
+| Update now | `~/.agent-setup/install.sh --update <names> --yes` |
+| Later | `~/.agent-setup/install.sh --snooze <names>` (asks again in 24 hours) |
+| Skip this version | `~/.agent-setup/install.sh --skip <name>@<version>` (asks again only when a newer version appears) |
+
+The same from a terminal:
+
+```sh
+~/.agent-setup/install.sh --check          # list pending updates: name: old -> new <compare link>
+~/.agent-setup/install.sh --update         # asks y/N per item, then installs the approved ones
+~/.agent-setup/install.sh --update superpowers,codegraph --yes
+```
+
+Each machine asks and approves separately, so two machines may run different approved versions. Approving never commits or pushes anything. When the repo itself has new commits on GitHub (new rules or skills you added elsewhere), the notice also says so; run `git -C ~/.agent-setup pull && ~/.agent-setup/install.sh`.
+
+Details: [updates](docs/reference.md#updates), [plugins per agent](docs/reference.md#plugins-per-agent).
 
 **Duplicates.** The installer never gives an agent the same skill twice: an agent that has a plugin natively does not get its vendored copy. It warns when a plugin is already installed from another marketplace (it does not install a second copy), or when a skill is in more than one folder an agent reads. `install.sh --fix-duplicates` switches such plugins to the source in `core/plugins.lock` and moves unmanaged duplicate skill folders to the backups.
 
@@ -168,7 +185,7 @@ Every agent gets `core/AGENTS.md` plus every rule in `core/rules/` (combined int
 
 ### Third-party skills
 
-Listed in `core/skills.lock`; each run fetches the latest of each repo into `vendor/`. Nothing runs at install time.
+Listed in `core/skills.lock`; each repo is checked out into `vendor/` at the commit approved on this machine. Nothing runs at install time.
 
 | Skill | Source | What it is for |
 |---|---|---|
@@ -186,17 +203,19 @@ The last four sources above are also plugins (`core/plugins.lock`). Each agent t
 
 | Plugin | Claude Code | Codex | Antigravity | Cursor and the rest |
 |---|---|---|---|---|
-| `superpowers` | `superpowers@claude-plugins-official`, auto-updates | `superpowers@openai-curated`, auto-updates | `agy plugin install`, refreshed by `install.sh` | vendored skills |
-| `taste-skill` | `taste-skill@taste-skill`, auto-update on | `taste-skill@taste-skill`, auto-updates | vendored skills | vendored skills |
-| `gsap-skills` | `gsap-skills@gsap-skills`, auto-update on | `gsap-skills@gsap-skills`, auto-updates | vendored skills | vendored skills |
-| `harness` | `harness@harness-marketplace`, auto-update on | `harness@harness-marketplace`, auto-updates | vendored skills | vendored skills |
+| `superpowers` | `superpowers@claude-plugins-official` | `superpowers@superpowers-dev` | `agy plugin install` from the approved checkout | vendored skills |
+| `taste-skill` | `taste-skill@taste-skill` | `taste-skill@taste-skill` | vendored skills | vendored skills |
+| `gsap-skills` | `gsap-skills@gsap-skills` | `gsap-skills@gsap-skills` | vendored skills | vendored skills |
+| `harness` | `harness@harness-marketplace` | `harness@harness-marketplace` | vendored skills | vendored skills |
+
+Every plugin stays at its approved version: auto-update is off, Codex installs from local catalogs pinned to the approved commit, and Cursor gets the vendored skills of the plugins Codex has natively in `~/.cursor/skills`.
 
 ### MCP servers
 
 | Server | What it is | Approval |
 |---|---|---|
 | `codegraph` | [CodeGraph](https://github.com/colbymchenry/codegraph) code intelligence (`codegraph serve --mcp`); index a project with `codegraph init` | Auto-approved |
-| `playwright` | [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), `@playwright/mcp@latest` | Asks as usual |
+| `playwright` | [microsoft/playwright-mcp](https://github.com/microsoft/playwright-mcp), `@playwright/mcp@<approved version>` | Asks as usual |
 
 ### Hooks
 
@@ -205,6 +224,7 @@ The last four sources above are also plugins (`core/plugins.lock`). Each agent t
 | Issue-branch guard | Before a file edit | Blocks edits on the default branch (and `master`/`main`) of GitHub/GitLab repos, so work happens on an issue branch. Opt out per repo: `git config claude.issueWorkflow off` |
 | English-only warning | Before a file write, shell command or MCP write | Warns when the content contains Vietnamese; never blocks. Opt out per repo: `git config claude.englishOnly off` |
 | CodeGraph prompt context | On each user prompt | Runs `codegraph prompt-hook` to add CodeGraph context |
+| Update notice | At session start | Tells the agent which installed items have newer versions, so it asks you (see [Updates](#updates-you-approve-every-update)); silent otherwise |
 
 Hooks fail open: a missing or broken script never blocks.
 
@@ -219,8 +239,8 @@ Hooks fail open: a missing or broken script never blocks.
 | Tool | Installed with |
 |---|---|
 | `gh`, `jq`, `uv`, `node` | Homebrew on macOS; Homebrew, apt-get, dnf or pacman on Linux; winget on Windows (installed when missing, never upgraded) |
-| `codegraph` | Its official installer, latest release (when missing) |
-| `agent-reach` | `uv tool install` of its latest release, then `agent-reach setup` (when missing) |
+| `codegraph` | Its official installer, at the approved release |
+| `agent-reach` | `uv tool install` of the approved release, then `agent-reach setup` |
 
 ## Supported agents
 
@@ -255,6 +275,7 @@ Gemini CLI, GitHub Copilot, opencode, Devin, Amp, Kiro, Cline, Factory Droid, Ze
   core/AGENTS.md + core/rules/     shared instructions
   core/skills/ + skills.lock       own and third-party skills
   core/plugins.lock                plugins installed natively per agent
+  state/approved.json              approved versions on this machine (local)
   core/mcp.json                    MCP servers
   core/hooks.json + core/hooks/    hooks
   shell/env.sh, tools/, git.conf   env, CLI tools, git identity
@@ -267,8 +288,8 @@ Gemini CLI, GitHub Copilot, opencode, Devin, Amp, Kiro, Cline, Factory Droid, Ze
 
 1. **Tools:** installs missing CLI tools (asks first unless `--yes`).
 2. **Git identity and shell env:** sets the git identity if unset and makes your shell source `shell/env.sh`.
-3. **Build:** combines the rules into `build/AGENTS.full.md` and fetches the latest third-party skills into `vendor/`.
-4. **Agents:** each agent's adapter installs and updates its native plugins, links the rules and skills, adds the MCP servers, renders the hooks into the agent's format and merges its settings.
+3. **Build:** combines the rules into `build/AGENTS.full.md` and checks out the third-party skills into `vendor/` at their approved commits.
+4. **Agents:** each agent's adapter installs its native plugins at the approved versions, links the rules and skills, adds the MCP servers, renders the hooks into the agent's format and merges its settings.
 
 ## Not included
 

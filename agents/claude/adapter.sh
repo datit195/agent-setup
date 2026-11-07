@@ -83,17 +83,8 @@ claude_mcp_old() {
 
 _claude_mcp_replace() { local name=$1; shift; claude mcp remove --scope user "$name" >/dev/null && "$@"; }
 
-# Where Claude Code keeps its plugin records.
-claude_plugins_dir() { printf '%s/plugins' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
-
 CLAUDE_OFFICIAL_MARKETPLACE=claude-plugins-official
 CLAUDE_OFFICIAL_REPO=anthropics/claude-plugins-official
-
-# "version commit" of the user-scope install of plugin ID, or "".
-claude_installed_ref() {
-  jq -r --arg id "$1" '[.plugins[$id][]? | select(.scope == "user") | "\(.version // "") \(.gitCommitSha // "")"][0] // empty' \
-    "$(claude_plugins_dir)/installed_plugins.json" 2>/dev/null | tr -d '\r' || true
-}
 
 # Save Claude's plugin records before changing a marketplace or uninstalling.
 claude_backup_plugins() {
@@ -116,43 +107,50 @@ _claude_repoint() {
   claude plugin marketplace add "$2" </dev/null >/dev/null
 }
 
-# Turn on auto-update for marketplace MARKET (from GitHub REPO): the documented
-# "autoUpdate": true on its extraKnownMarketplaces entry in user settings.
-# Claude Code drops that field whenever it re-adds the marketplace, so this
-# runs after any add.
-claude_auto_update() {
+# Turn off auto-update for marketplace MARKET (from GitHub REPO): the
+# documented "autoUpdate": false on its extraKnownMarketplaces entry in user
+# settings, which wins over the default (on for claude-plugins-official) and
+# the /plugin toggle. Claude Code drops the field whenever it re-adds the
+# marketplace, so this runs after any add.
+claude_no_auto_update() {
   json_merge "$HOME/.claude/settings.json" --arg m "$1" --arg r "$2" '
-    .extraKnownMarketplaces[$m] = ((.extraKnownMarketplaces[$m] // {source: {source: "github", repo: $r}}) + {autoUpdate: true})'
+    .extraKnownMarketplaces[$m] = ((.extraKnownMarketplaces[$m] // {source: {source: "github", repo: $r}}) + {autoUpdate: false})'
 }
 
-# claude_refresh MARKETS IDS: update the marketplaces, then the plugins, with
-# Claude Code's own commands (the same as its auto-update). A plugin counts as
-# changed only when its installed version or commit moved.
-claude_refresh() {
-  local m id before after
-  [ -n "$2" ] || return 0
-  if [ "$DRY_RUN" = 1 ]; then
-    log "[dry-run] claude: would update the plugin marketplaces and plugins:$(printf ' %s' $2)"
-    return 0
-  fi
-  for m in $1; do
-    claude plugin marketplace update "$m" </dev/null >/dev/null 2>&1 || warn "claude: 'plugin marketplace update $m' failed; its plugins keep their installed version"
-  done
-  for id in $2; do
-    before=$(claude_installed_ref "$id")
-    claude plugin update "$id" </dev/null >/dev/null 2>&1 || { warn "claude: 'plugin update $id' failed; kept ${before%% *}"; continue; }
-    after=$(claude_installed_ref "$id")
-    [ "$before" = "$after" ] || changed "claude: updated plugin $id: ${before%% *} -> ${after%% *} (restart Claude Code or run /reload-plugins)"
-  done
+# The commit Claude Code recorded for the user-scope install of plugin ID.
+claude_installed_sha() { claude_installed_ref "$1" | awk '{ print $2 }'; }
+
+# _claude_update MARKET ID: refresh the marketplace and reinstall the plugin
+# from it (a reinstall, because Claude Code's own update skips commits that
+# keep the plugin's version string). Plugin data is kept.
+_claude_update() {
+  claude plugin marketplace update "$1" </dev/null >/dev/null &&
+    claude plugin uninstall --keep-data "$2" </dev/null >/dev/null &&
+    claude plugin install "$2" </dev/null
+}
+
+# claude_settle ID ITEM: after an install, the approved version must be what
+# Claude Code installed (the marketplace offers only its current commit). If
+# it differs (upstream moved since the check), that commit becomes the
+# approved one, with a warning.
+claude_settle() {
+  local cur want
+  [ "$DRY_RUN" != 1 ] || return 0
+  cur=$(claude_installed_sha "$1")
+  want=$(approved "$2")
+  _is_sha "$cur" && [ "$cur" != "$want" ] || return 0
+  set_approved "$2" "$cur" ""
+  warn "claude: the marketplace installed $1 at ${cur:0:12}, not ${want:0:12} (it moved since the check); ${cur:0:12} is now the approved version of $2 (the other agents follow on the next run)"
 }
 
 # Install every core/plugins.lock plugin with a claude= entry from the
-# author's marketplace, with auto-update on for third-party marketplaces, and
-# update them. A plugin already installed from another marketplace is not
+# author's marketplace, with auto-update off. An installed plugin is left at
+# its version; only `install.sh --update <item>` moves it to the newly
+# approved commit. A plugin already installed from another marketplace is not
 # installed a second time: that is a warning, and with --fix-duplicates the
 # other copy is uninstalled first.
 claude_plugins() {
-  local markets installed name repo id mkt cur others o om dup lock_mkts refresh_m="" refresh_ids=""
+  local markets installed name repo id mkt mrepo cur others o om dup lock_mkts item want
   markets=$(claude plugin marketplace list --json 2>/dev/null) &&
     printf '%s' "$markets" | jq -e 'type == "array"' >/dev/null 2>&1 || { warn "claude: 'plugin marketplace list --json' failed; plugins skipped"; return 0; }
   installed=$(claude plugin list --json 2>/dev/null) &&
@@ -160,14 +158,16 @@ claude_plugins() {
   lock_mkts=$'\n'$(plugin_ids claude | cut -f3 | sed 's/.*@//')$'\n'
   while IFS=$'\t' read -r name repo id <&3; do
     [ -n "$name" ] || continue
-    mkt=${id#*@}
+    mkt=${id#*@} item=$(repo_item "$repo")
 
-    # 1. The marketplace, from the author's source.
+    # 1. The marketplace, from the author's source, with auto-update off.
     if [ "$mkt" = "$CLAUDE_OFFICIAL_MARKETPLACE" ]; then
+      mrepo=$CLAUDE_OFFICIAL_REPO
       if ! printf '%s' "$markets" | jq -e --arg m "$mkt" 'any(.[]; .name == $m)' >/dev/null; then
         act "claude: add plugin marketplace $CLAUDE_OFFICIAL_REPO" claude plugin marketplace add "$CLAUDE_OFFICIAL_REPO"
       fi
     else
+      mrepo=$repo
       cur=$(printf '%s' "$markets" | jq -r --arg m "$mkt" '.[] | select(.name == $m) | "\(.source) \(.repo // .path // .url // "")"' | tr -d '\r')
       if [ -z "$cur" ]; then
         act "claude: add plugin marketplace $mkt from $repo" claude plugin marketplace add "$repo"
@@ -175,9 +175,8 @@ claude_plugins() {
         claude_backup_plugins
         act "claude: point plugin marketplace $mkt at $repo (was ${cur#* }); its plugins stay installed" _claude_repoint "$mkt" "$repo"
       fi
-      claude_auto_update "$mkt" "$repo"
     fi
-    case " $refresh_m " in *" $mkt "*) ;; *) refresh_m="$refresh_m $mkt" ;; esac
+    claude_no_auto_update "$mkt" "$mrepo"
 
     # 2. Copies of the same plugin from other marketplaces.
     others=$(printf '%s' "$installed" | jq -r --arg n "$name" --arg id "$id" \
@@ -198,14 +197,25 @@ claude_plugins() {
       fi
     done
 
-    # 3. The plugin itself.
-    if printf '%s' "$installed" | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null; then
-      refresh_ids="$refresh_ids $id"
-    elif [ "$dup" = 0 ]; then
+    # 3. The plugin itself, at the approved version.
+    want=$(approved "$item")
+    if ! printf '%s' "$installed" | jq -e --arg id "$id" 'any(.[]; .id == $id)' >/dev/null; then
+      [ "$dup" = 0 ] || continue
+      if [ -z "$want" ]; then warn "claude: $item has no approved version; $id not installed"; continue; fi
       act "claude: install plugin $id" claude plugin install "$id"
+      claude_settle "$id" "$item"
+      continue
+    fi
+    cur=$(claude_installed_sha "$id")
+    [ -n "$want" ] && _is_sha "$cur" && [ "$cur" != "$want" ] || continue
+    if updating "$item"; then
+      claude_backup_plugins
+      act "claude: update plugin $id: ${cur:0:12} -> ${want:0:12} (restart Claude Code or run /reload-plugins)" _claude_update "$mkt" "$id"
+      claude_settle "$id" "$item"
+    else
+      warn "claude: $id is installed at ${cur:0:12}, but ${want:0:12} is approved on this machine; it was left as it is (install.sh --update $item installs the newest after asking)"
     fi
   done 3< <(plugin_ids claude)
-  claude_refresh "$refresh_m" "$refresh_ids"
 
   # The local pinned catalogs of earlier versions, once no marketplace uses them.
   local old="$ROOT/build/claude-marketplaces"

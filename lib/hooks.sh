@@ -58,7 +58,8 @@ HOOKS_MERGE_JQ='
 
 # antigravity_hooks_json SHIM DIR PY WRAP: the "agent-setup" group for
 # ~/.gemini/config/hooks.json. Every hook runs through SHIM (Claude-shaped
-# input and output); UserPromptSubmit hooks run on PreInvocation.
+# input and output); UserPromptSubmit hooks run on PreInvocation, SessionStart
+# hooks on SessionStart.
 antigravity_hooks_json() {
   jq -n --slurpfile h "$ROOT/core/hooks.json" --arg shim "$1" --arg dir "$2" --arg py "$3" --arg wrap "$4" '
     '"$PYRUN_JQ"'
@@ -67,7 +68,7 @@ antigravity_hooks_json() {
         "f=\"\($shim)\"; [ -f \"$f\" ] || { echo '"'"'\($default)'"'"'; exit 0; }; \($py) -I \"$f\" \($mode) \($target) || echo '"'"'\($default)'"'"'"
       else pyrun($shim; [$mode] + $argv; $default) end;
     [$h[0].hooks[]
-      | select(.event == "UserPromptSubmit" or (.event == "PreToolUse" and (.matcher.antigravity // "") != ""))]
+      | select(.event == "UserPromptSubmit" or .event == "SessionStart" or (.event == "PreToolUse" and (.matcher.antigravity // "") != ""))]
     | reduce .[] as $x ({};
         (if $x.command then ($x.command | split(" ")) else ["\($dir)/\($x.script)"] end) as $argv
         | ($argv | map(if test("^[A-Za-z0-9_./:-]+$") then . else "\"\(.)\"" end) | join(" ")) as $t
@@ -75,6 +76,7 @@ antigravity_hooks_json() {
         | if $x.event == "PreToolUse" then
             .PreToolUse += [{matcher: $x.matcher.antigravity,
                              hooks: [{type: "command", command: run("pretool"; $t; $argv; "{\"decision\":\"allow\"}")} + $to]}]
+          elif $x.event == "SessionStart" then .SessionStart += [{type: "command", command: run("session"; $t; $argv; "{}")} + $to]
           else .PreInvocation += [{type: "command", command: run("prompt"; $t; $argv; "{}")} + $to]
           end)'
 }

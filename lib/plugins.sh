@@ -46,3 +46,12 @@ codex_scan_native() {
     fi
   done < <(plugin_ids codex)
 }
+
+# Where Claude Code keeps its plugin records.
+claude_plugins_dir() { printf '%s/plugins' "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; }
+
+# "version commit" of the user-scope Claude Code install of plugin ID, or "".
+claude_installed_ref() {
+  jq -r --arg id "$1" '[.plugins[$id][]? | select(.scope == "user") | "\(.version // "") \(.gitCommitSha // "")"][0] // empty' \
+    "$(claude_plugins_dir)/installed_plugins.json" 2>/dev/null | tr -d '\r' || true
+}

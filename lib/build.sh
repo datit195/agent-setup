@@ -1,6 +1,6 @@
 # shellcheck shell=bash
-# Build step: generate build/AGENTS.full.md, fetch the latest third-party
-# skills and apply skill description overrides.
+# Build step: generate build/AGENTS.full.md, check out the approved
+# third-party skills, apply skill description overrides and resolve core/mcp.json.
 
 AGENTS_MAX_BYTES=32768   # Codex project-doc limit
 
@@ -83,20 +83,9 @@ _sparse_patterns() {
     END { if (!full) printf "%s", out }'
 }
 
-# _vendor_ref URL TRACK: the ref to fetch: HEAD (the default branch), or with
-# TRACK the highest version tag matching that glob.
-_vendor_ref() {
-  local tag
-  if [ -z "$2" ]; then printf HEAD; return 0; fi
-  tag=$(git ls-remote --tags --sort=-v:refname "$1" "refs/tags/$2" 2>/dev/null |
-    awk 'NR == 1 { r = $2; sub("^refs/tags/", "", r); sub(/\^\{\}$/, "", r); print r }')
-  [ -n "$tag" ] || return 1
-  printf 'refs/tags/%s' "$tag"
-}
-
-# _fetch_new DIR URL REF PATTERNS: shallow, blob-less fetch of REF into a new
-# DIR, checking out only PATTERNS ("" = whole tree). Built next to DIR and moved
-# into place, so a failed fetch leaves nothing behind.
+# _fetch_new DIR URL COMMIT PATTERNS: shallow, blob-less fetch of COMMIT into
+# a new DIR, checking out only PATTERNS ("" = whole tree). Built next to DIR
+# and moved into place, so a failed fetch leaves nothing behind.
 _fetch_new() {
   local dir=$1 url=$2 ref=$3 want=$4 tmp="$1.tmp"
   rm -rf "$tmp" && mkdir -p "$tmp" &&
@@ -109,61 +98,52 @@ _fetch_new() {
         git -C "$tmp" config core.sparseCheckout true &&
         printf '%s\n' "$want" >"$tmp/.git/info/sparse-checkout"
     }; } &&
-    git -C "$tmp" fetch -q --depth 1 --filter=blob:none origin "$ref" &&
+    _git_net -C "$tmp" fetch -q --depth 1 --filter=blob:none origin "$ref" &&
     git -C "$tmp" -c advice.detachedHead=false checkout -q --detach 'FETCH_HEAD^{commit}' &&
     mv "$tmp" "$dir" ||
     { rm -rf "$tmp"; return 1; }
 }
 
-# _vendor_repo REPO TRACK PATTERNS: bring vendor/<owner>__<repo>/ to the latest
-# commit of REPO (or its latest TRACK tag), limited to PATTERNS. The checkout
-# moves in place, so links into it never dangle; when the fetch fails the last
-# good copy is kept. Counts a change only when the commit moved. Returns 1 when
-# there is no checkout at all.
+# _vendor_checkout DIR COMMIT: move the checkout in DIR to COMMIT in place.
+_vendor_checkout() {
+  git -C "$1" cat-file -e "$2^{commit}" 2>/dev/null ||
+    _git_net -C "$1" fetch -q --depth 1 --filter=blob:none origin "$2" || return 1
+  git -C "$1" -c advice.detachedHead=false checkout -q --detach "$2"
+}
+
+# _vendor_repo REPO COMMIT PATTERNS: bring vendor/<owner>__<repo>/ to COMMIT
+# (the approved one), limited to PATTERNS. The checkout moves in place, so
+# links into it never dangle; when the fetch fails the last good copy is kept.
+# Returns 1 when there is no checkout at all.
 _vendor_repo() {
-  local repo=$1 track=$2 want=$3 base dir url ref old new
+  local repo=$1 sha=$2 want=$3 base dir old
   base="${repo%%/*}__${repo#*/}"
   dir="$ROOT/vendor/$base"
-  url="https://github.com/$repo.git"
   if [ ! -d "$dir/.git" ]; then
-    if [ "$DRY_RUN" = 1 ]; then act "fetch the latest $repo${track:+ (tag $track)} into vendor/$base"; return 0; fi
-    if ! ref=$(_vendor_ref "$url" "$track"); then
-      warn "could not resolve $repo${track:+ (tag $track)}; its skills are skipped"
-      return 1
-    fi
-    act "fetch the latest $repo${track:+ ($ref)} into vendor/$base" _fetch_new "$dir" "$url" "$ref" "$want"
-    [ -d "$dir/.git" ]
+    act "fetch $repo at ${sha:0:12} into vendor/$base" _fetch_new "$dir" "$(gh_url "$repo")" "$sha" "$want"
+    [ "$DRY_RUN" = 1 ] || [ -d "$dir/.git" ]
     return
   fi
-  old=$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)
   if [ "$(_sparse_state "$dir")" != "$want" ]; then
     act "update checked-out paths of vendor/$base" _apply_sparse "$dir" "$want"
   fi
-  if [ "$DRY_RUN" = 1 ]; then
-    log "[dry-run] would fetch the latest $repo${track:+ (tag $track)} (now ${old:0:12})"
-    return 0
-  fi
-  if ! ref=$(_vendor_ref "$url" "$track") ||
-    ! git -C "$dir" fetch -q --depth 1 --filter=blob:none origin "$ref" 2>/dev/null; then
-    warn "could not fetch $repo; kept the last good copy (${old:0:12})"
-    return 0
-  fi
-  new=$(git -C "$dir" rev-parse 'FETCH_HEAD^{commit}')
-  [ "$new" = "$old" ] && return 0
-  act "update vendor/$base: ${old:0:12} -> ${new:0:12}${track:+ (${ref#refs/tags/})}" \
-    git -C "$dir" -c advice.detachedHead=false checkout -q --detach "$new"
+  old=$(git -C "$dir" rev-parse HEAD 2>/dev/null || true)
+  [ "$old" != "$sha" ] || return 0
+  act "update vendor/$base: ${old:0:12} -> ${sha:0:12} (approved)" _vendor_checkout "$dir" "$sha"
   return 0
 }
 
 # vendor/ dirs in use this run, one per line (for cleanup_vendor).
 VENDOR_DIRS=$'\n'
 
-# Fetch the latest of every core/skills.lock repo into vendor/<owner>__<repo>/
-# (only the paths the lock lists for it) and record each skill in
-# VENDORED_SKILLS as "name<TAB>skill dir<TAB>skip<TAB>plugin" (skip: agents,
-# or "-"; plugin: the core/plugins.lock plugin it is a copy of, or "").
+# Check out every core/skills.lock repo at its approved commit into
+# vendor/<owner>__<repo>/ (only the paths the lock lists for it; the whole
+# tree for a repo Antigravity installs as a plugin from there) and record
+# each skill in VENDORED_SKILLS as "name<TAB>skill dir<TAB>skip<TAB>plugin"
+# (skip: agents, or "-"; plugin: the core/plugins.lock plugin it is a copy
+# of, or ""). A repo without an approved commit is skipped.
 vendor_skills() {
-  local name repo path opts entries="" repo_list dir src track ok=$'\n' plugin skip
+  local name repo path opts entries="" repo_list dir src ok=$'\n' plugin skip sha want
   while IFS=$'\t' read -r name repo path opts; do
     [ -n "$name" ] || continue
     case $repo in */*) ;; *) warn "skills.lock: bad entry for '$name'; skipped"; continue ;; esac
@@ -175,8 +155,12 @@ vendor_skills() {
   while IFS= read -r repo <&3; do
     [ -n "$repo" ] || continue
     VENDOR_DIRS="$VENDOR_DIRS${repo%%/*}__${repo#*/}"$'\n'
-    track=$(printf '%s' "$entries" | awk -F '\t' -v r="$repo" '$2 == r { print $4 }' | while IFS= read -r opts; do opt_value "$opts" track; done | head -n 1)
-    if _vendor_repo "$repo" "$track" "$(_sparse_patterns "$entries" "$repo")"; then ok="$ok$repo"$'\n'; fi
+    sha=$(approved "$(repo_item "$repo")")
+    [ -n "$sha" ] || continue
+    want=$(_sparse_patterns "$entries" "$repo")
+    plugin=$(plugin_for_repo "$repo")
+    if [ -n "$plugin" ] && [ -n "$(plugin_ids antigravity | awk -F '\t' -v n="$plugin" '$1 == n')" ]; then want=""; fi
+    if _vendor_repo "$repo" "$sha" "$want"; then ok="$ok$repo"$'\n'; fi
   done 3<<EOF
 $repo_list
 EOF
@@ -186,7 +170,7 @@ EOF
     dir="$ROOT/vendor/${repo%%/*}__${repo#*/}"
     if [ "$path" = "." ]; then src=$dir; else src="$dir/$path"; fi
     if [ "$DRY_RUN" != 1 ] && [ ! -d "$src" ]; then
-      warn "skills.lock: '$path' not found in the latest $repo; skill $name skipped"
+      warn "skills.lock: '$path' not found in $repo at the approved commit; skill $name skipped"
       continue
     fi
     plugin=$(plugin_for_repo "$repo")
@@ -299,4 +283,25 @@ override_skills() {
     [ -z "$rest" ] || rest="$rest"$'\n'
     VENDORED_SKILLS="$rest$name"$'\t'"$out"$'\t'"$meta"$'\n'
   done < <(lock_lines "$file")
+}
+
+# MCP_JSON: core/mcp.json with each pinned server's {version} set to the
+# version approved on this machine; the previously approved args join its
+# oldArgs, so a config at that version is moved to the new one. A pinned
+# server without an approved version is left out.
+MCP_JSON="$ROOT/core/mcp.json"
+resolve_mcp() {
+  MCP_JSON="$TMP_DIR/mcp.json"
+  jq --argjson ap "$APPROVED" '
+    del(._comment)
+    | .servers |= with_entries(
+        if .value.pin then
+          .key as $n | ($ap[$n].version // "") as $v | ($ap[$n].previous // "") as $p
+          | if $v == "" then empty else
+              .value |= ((.args // []) as $a
+                | .args = ($a | map(gsub("\\{version\\}"; $v)))
+                | .oldArgs = ((.oldArgs // []) + (if $p != "" then [$a | map(gsub("\\{version\\}"; $p))] else [] end))
+                | del(.pin))
+            end
+        else . end)' "$ROOT/core/mcp.json" >"$MCP_JSON"
 }

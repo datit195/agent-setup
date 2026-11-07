@@ -56,7 +56,7 @@ json_merge() {
 #                 ("oldArgs"); a server with exactly those args is replaced
 mcp_each() {
   local cb=$1 line name cmd args env a
-  local file="$ROOT/core/mcp.json"
+  local file="$MCP_JSON"
   [ -f "$file" ] || return 0
   # fd 3, not stdin: an agent CLI that reads stdin must not eat the remaining servers.
   while IFS= read -r line <&3; do
@@ -82,7 +82,7 @@ mcp_each() {
 # older agent-setup wrote (TEMPLATE with one of the server's "oldArgs").
 mcp_merge_file() {
   local file=$1 path=$2 tmpl=$3 todo
-  [ -f "$ROOT/core/mcp.json" ] || return 0
+  [ -f "$MCP_JSON" ] || return 0
   # shellcheck disable=SC2016
   local upd='($s.value.command as $c | ($s.value.env // {}) as $e
       | (($s.value.args // []) as $a | '"$tmpl"') as $new
@@ -90,17 +90,17 @@ mcp_merge_file() {
       | ((('"$path"') // {})[$s.key]) as $have
       | if $have == null then $new elif any($old[]; . == $have) then $new else $have end)'
   if [ -e "$file" ] && [ -s "$file" ] && jq -e 'type == "object"' "$file" >/dev/null 2>&1; then
-    if ! todo=$(jq -r --slurpfile m "$ROOT/core/mcp.json" \
+    if ! todo=$(jq -r --slurpfile m "$MCP_JSON" \
       ". as \$r | \$m[0].servers // {} | to_entries[] as \$s | \$r | select(((($path) // {})[\$s.key]) != $upd) | \$s.key" "$file" 2>&1); then
       warn "$(pretty "$file"): cannot read $path ($todo); MCP servers not added"
       return 0
     fi
   else
-    todo=$(jq -r '.servers // {} | keys[]' "$ROOT/core/mcp.json")
+    todo=$(jq -r '.servers // {} | keys[]' "$MCP_JSON")
   fi
   [ -n "$todo" ] || return 0
   log "MCP servers to add or update in $(pretty "$file"): $(printf '%s' "$todo" | tr '\n' ' ')"
-  json_merge "$file" --slurpfile m "$ROOT/core/mcp.json" "
+  json_merge "$file" --slurpfile m "$MCP_JSON" "
     reduce ((\$m[0].servers // {}) | to_entries[]) as \$s (.; ($path)[\$s.key] = $upd)"
 }
 
@@ -137,5 +137,5 @@ mcp_env_unsupported() {
 # using $n, the server name) for every core/mcp.json server marked
 # "autoApprove": true. Example: mcp_auto_approve '"mcp__\($n)__*"'
 mcp_auto_approve() {
-  jq -c "[.servers // {} | to_entries[] | select(.value.autoApprove == true) | .key as \$n | $1]" "$ROOT/core/mcp.json"
+  jq -c "[.servers // {} | to_entries[] | select(.value.autoApprove == true) | .key as \$n | $1]" "$MCP_JSON"
 }
