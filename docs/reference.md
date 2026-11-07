@@ -1,6 +1,6 @@
 ---
 title: Agent setup reference
-description: Maintainer reference for agent-setup covering layout, vendoring, plugins per agent, updates, duplicates, per-agent paths, hooks, install steps, editing, backups and known gaps.
+description: Maintainer reference for agent-setup covering layout, vendoring, plugins per agent, approved versions and updates, duplicates, per-agent paths, hooks, install steps, editing, backups and known gaps.
 updated: 2026-11-07
 status: active
 ---
@@ -30,21 +30,22 @@ This page holds the details behind the [README](../README.md): how the repo is l
 |---|---|
 | `core/AGENTS.md`, `core/rules/*.md` | Shared instructions and rules (including coordinator mode) |
 | `core/skills/<name>/` | Own skills |
-| `core/skills.lock` | Third-party skills and where they come from (the latest is fetched into `vendor/` on every run); options `skip=<agents>` and `track=<tag glob>` |
-| `core/plugins.lock` | Plugins and, per agent, how that agent installs them natively (`claude=`, `codex=`, `antigravity=`) |
+| `core/skills.lock` | Third-party skills and where they come from (no versions); options `skip=<agents>` and `track=<tag glob>` |
+| `core/plugins.lock` | Plugins and, per agent, how that agent installs them natively (`claude=`, `codex=`, `antigravity=`; no versions) |
+| `state/approved.json`, `state/updates.json` | Per machine, gitignored: the approved version of every item, and the update-check cache with your `--skip` and `--snooze` answers (see [Updates](#updates)) |
 | `core/skills.overrides` | Replacement descriptions for third-party skills |
-| `core/mcp.json` | Shared MCP servers; `"autoApprove": true` lets agents call a server's tools without asking |
+| `core/mcp.json` | Shared MCP servers; `"autoApprove": true` lets agents call a server's tools without asking; `"pin": {"npm": ...}` makes a server's `{version}` the approved one |
 | `core/hooks.json`, `core/hooks/` | Hook definitions for every agent and the hook scripts |
 | `agents/<name>/adapter.sh` | Per-agent installer (`detect` and `install`) |
 | `shell/env.sh` | Shared agent env (e.g. `IMPECCABLE_NO_TELEMETRY=1`): sourced from `~/.zshrc` / `~/.bashrc`, and the source of Claude Code's `env` and Codex's `shell_environment_policy.set` |
 | `agents/claude/` | Claude Code only: `CLAUDE.md` stub, `rules/claude-extras.md` (attribution), `settings.base.json` |
-| `tools/Brewfile`, `tools/tools.lock` | CLI tools (`tools.lock` lines may name the OSes they apply to) |
+| `tools/Brewfile`, `tools/tools.lock` | CLI tools (`tools.lock` lines name the OSes they apply to; `release=<owner/repo>` makes a tool an approved item installed at `{tag}`) |
 | `git.conf` | Global git identity (set only when unset) |
 | `issue-workflow/` | CI templates referenced by the issue-workflow rule |
-| `lib/` | Installer helpers (`toml_set.py` adds missing keys to Codex's `config.toml`; `plugins.sh` reads `core/plugins.lock` and tracks which agent has which plugin natively) |
+| `lib/` | Installer helpers (`toml_set.py` adds missing keys to Codex's `config.toml`; `plugins.sh` reads `core/plugins.lock` and tracks which agent has which plugin natively; `updates.sh` keeps the approved versions and implements `--check`, `--update`, `--snooze`, `--skip` and the session-start notice) |
 | `tests/install-test.sh` | Sandbox-HOME install test, run by CI on macOS, Ubuntu and Windows, with stub `claude`, `codex` and `agy` CLIs (`tests/*-stub.sh`) |
 | `docs/` | This reference |
-| `build/`, `vendor/` | Generated, gitignored (`vendor/<owner>__<repo>/`: one checkout per skills repo) |
+| `build/`, `vendor/` | Generated, gitignored (`vendor/<owner>__<repo>/`: one checkout per skills repo; `build/codex-marketplaces/`: Codex's pinned plugin catalogs) |
 
 `build/AGENTS.full.md` is `core/AGENTS.md` plus every `core/rules/*.md` (frontmatter stripped). Agents that read one instruction file link to it. The installer warns when it passes 32 KiB, the Codex limit; Antigravity reads at most 24 KB per file, so keep it below that (about 15 KB now).
 
@@ -52,15 +53,17 @@ Nothing is kept twice. Where an agent's format forces its own file (Codex `confi
 
 ## Third-party skills and vendoring
 
-| Skill | Source | Follows |
-|---|---|---|
-| `anatomy` | `wheresryan22/anatomy` (whole repo) | default branch |
-| `threejs-*` (13 skills) | `cloudai-x/threejs-skills`, `skills/<name>` | default branch |
-| `impeccable` | `pbakaus/impeccable`, `.agents/skills/impeccable` | latest `skill-v*` release tag (`track=skill-v*`) |
-| `taste-skill` | `Leonxlnx/taste-skill`, `skills/taste-skill` | default branch |
-| `gsap-*` (8 skills) | `greensock/gsap-skills`, `skills/gsap-*` | default branch |
-| superpowers (15 skills) | `obra/superpowers`, `skills/*` | default branch |
-| `harness`, `evolve` | `revfactory/harness`, `skills/harness`, `skills/evolve` | default branch |
+| Skill | Source | Item | Newer versions are |
+|---|---|---|---|
+| `anatomy` | `wheresryan22/anatomy` (whole repo) | `anatomy` | default branch commits |
+| `threejs-*` (13 skills) | `cloudai-x/threejs-skills`, `skills/<name>` | `threejs-skills` | default branch commits |
+| `impeccable` | `pbakaus/impeccable`, `.agents/skills/impeccable` | `impeccable` | `skill-v*` release tags (`track=skill-v*`) |
+| `taste-skill` | `Leonxlnx/taste-skill`, `skills/taste-skill` | `taste-skill` | default branch commits |
+| `gsap-*` (8 skills) | `greensock/gsap-skills`, `skills/gsap-*` | `gsap-skills` | default branch commits |
+| superpowers (15 skills) | `obra/superpowers`, `skills/*` | `superpowers` | the commit Anthropic's official marketplace offers (Claude Code installs it from there) |
+| `harness`, `evolve` | `revfactory/harness`, `skills/harness`, `skills/evolve` | `harness` | default branch commits |
+
+An item is one repo: all skills from a repo, and the plugin from it in every agent, share its approved commit.
 
 The last four repos are also plugins (`core/plugins.lock`): a skills.lock entry from a plugin's repo is a copy of that plugin, and an agent that has the plugin natively does not get the copy (see [Plugins per agent](#plugins-per-agent)).
 
@@ -68,7 +71,7 @@ Audit notes (nothing runs at install time; scripts run only when an agent invoke
 
 `impeccable` is a skill only (no plugin, no hooks), with telemetry off. Its description is overridden so agents use it only when the user says "impeccable" or runs `/impeccable <command>`; `taste-skill` stays the default for general frontend work.
 
-Vendoring is sparse: each repo is a shallow, blob-less partial clone in `vendor/<owner>__<repo>/`, and only the paths `skills.lock` lists for it are checked out (path `.` checks out the whole tree). The impeccable repo is about 1 GB, but its vendor dir is a few MB. Every run (not `--dry-run`, which only says it would fetch) fetches the head of the default branch, or the highest tag matching `track=`, and moves the checkout in place when the commit changed, so links into it never dangle; that counts as a change, an unchanged repo does not. When a fetch fails, the last good copy stays and the run warns and goes on. Vendor dirs no entry uses any more (such as the old pinned `<owner>__<repo>@<sha>` dirs) are removed at the end of the run, once no skill link points into them; links into an old dir are re-pointed at the new one.
+Vendoring is sparse: each repo is a shallow, blob-less partial clone in `vendor/<owner>__<repo>/`, and only the paths `skills.lock` lists for it are checked out (path `.` checks out the whole tree; a repo Antigravity installs as a plugin is checked out whole). The impeccable repo is about 1 GB, but its vendor dir is a few MB. The checkout is at the item's approved commit; a run fetches only when the approved commit changed (after `--update`), and moves the checkout in place, so links into it never dangle. When a fetch fails, the last good copy stays and the run warns and goes on. Vendor dirs no entry uses any more (such as the old pinned `<owner>__<repo>@<sha>` dirs) are removed at the end of the run, once no skill link points into them; links into an old dir are re-pointed at the new one.
 
 ### Overrides
 
@@ -76,7 +79,7 @@ Vendoring is sparse: each repo is a shallow, blob-less partial clone in `vendor/
 
 ## Plugins per agent
 
-`core/plugins.lock` lines are the plugin name, its GitHub repo, and `<agent>=<how>` entries. An agent with an entry installs the plugin natively (when its CLI is there); any other agent gets the plugin's skills as vendored copies. Researched in November 2026 against the docs and source below; the Codex commands were also run against Codex CLI 0.167.0 in a scratch `CODEX_HOME`, the Claude Code ones against Claude Code 2.1.319.
+`core/plugins.lock` lines are the plugin name, its GitHub repo, and `<agent>=<how>` entries. An agent with an entry installs the plugin natively (when its CLI is there), at the approved commit of the plugin's repo; any other agent gets the plugin's skills as vendored copies. No agent auto-updates them. Researched in November 2026 against the docs and source below; the Codex commands were also run against Codex CLI 0.167.0 in a scratch `CODEX_HOME`, the Claude Code ones against Claude Code 2.1.319.
 
 ### Matrix
 
@@ -84,61 +87,79 @@ Manifests each plugin repo ships (checked with `gh api`): superpowers has `.clau
 
 | Plugin | Claude Code | Codex | Cursor | Antigravity |
 |---|---|---|---|---|
-| superpowers (`obra/superpowers`) | native, auto-update (`superpowers@claude-plugins-official`, on by default) | native, auto-update (`superpowers@openai-curated`, the author's Codex recommendation; vendored until Codex has synced that marketplace) | vendored | native, refreshed by `install.sh` (`agy plugin install https://github.com/obra/superpowers`) |
-| taste-skill (`Leonxlnx/taste-skill`) | native, auto-update (`taste-skill@taste-skill`, turned on by the installer) | native, auto-update (`taste-skill@taste-skill`, from its `.agents/plugins` marketplace) | vendored | vendored (no Antigravity manifest) |
-| gsap-skills (`greensock/gsap-skills`) | native, auto-update (`gsap-skills@gsap-skills`, turned on by the installer) | native, auto-update (`gsap-skills@gsap-skills`; Codex reads its `.claude-plugin` marketplace) | vendored | vendored (no Antigravity manifest) |
-| harness (`revfactory/harness`) | native, auto-update (`harness@harness-marketplace`, turned on by the installer) | native, auto-update (`harness@harness-marketplace`; Codex reads its `.claude-plugin` marketplace) | vendored | vendored (no Antigravity manifest) |
+| superpowers (`obra/superpowers`) | `superpowers@claude-plugins-official` | `superpowers@superpowers-dev` (pinned local catalog) | vendored (`~/.cursor/skills` when Codex has the plugin) | `agy plugin install <vendor checkout>` |
+| taste-skill (`Leonxlnx/taste-skill`) | `taste-skill@taste-skill` | `taste-skill@taste-skill` (pinned local catalog) | vendored (same) | vendored (no Antigravity manifest) |
+| gsap-skills (`greensock/gsap-skills`) | `gsap-skills@gsap-skills` | `gsap-skills@gsap-skills` (pinned local catalog) | vendored (same) | vendored (no Antigravity manifest) |
+| harness (`revfactory/harness`) | `harness@harness-marketplace` | `harness@harness-marketplace` (pinned local catalog) | vendored (same) | vendored (no Antigravity manifest) |
 
 Every other agent (Gemini CLI, Copilot, opencode, Kiro, ...) gets vendored skills.
 
 ### Claude Code
 
 - Install: `claude plugin marketplace add <owner>/<repo>`, then `claude plugin install <plugin>@<marketplace>` ([create a marketplace](https://code.claude.com/docs/en/plugins/create-marketplace.md), [install plugins](https://code.claude.com/docs/en/plugins/install.md)). The official marketplace is added from `anthropics/claude-plugins-official`.
-- Auto-update: on by default for `claude-plugins-official`, off for third-party marketplaces. It is turned on with `"autoUpdate": true` on the marketplace's `extraKnownMarketplaces` entry in a settings file, which takes precedence over the `/plugin` toggle stored in `known_marketplaces.json` ([settings reference](https://code.claude.com/docs/en/settings-reference.md#extraknownmarketplaces), [when auto-update runs](https://code.claude.com/docs/en/plugins/loading.md#when-auto-update-runs)). The installer sets it in `~/.claude/settings.json` for each third-party marketplace. `claude plugin marketplace add` rewrites that entry without `autoUpdate` (seen in 2.1.319), so the installer only re-adds a marketplace when it must and sets the field afterwards. Auto-update runs a few minutes into an interactive session; `DISABLE_AUTOUPDATER=1` turns it off unless `FORCE_AUTOUPDATE_PLUGINS=1`.
-- A new version arrives only when the plugin's version string changes ([release a new version](https://code.claude.com/docs/en/plugins/host-marketplace.md#release-a-new-version)).
-- Each `install.sh` run also runs `claude plugin marketplace update <marketplace>` and `claude plugin update <id>` and reports a plugin as changed when its installed version or commit moved.
-- Migration from the old pinned catalogs: a marketplace added from a folder in `build/claude-marketplaces/` is pointed at the author's GitHub repo in place: the installer rewrites the `extraKnownMarketplaces` source in user settings (Claude Code refuses a source that disagrees with it), then runs `claude plugin marketplace add <owner>/<repo>`, which re-points the marketplace and keeps its plugins and their data installed. `build/claude-marketplaces/` is removed once no marketplace uses it. Plugin records and settings are backed up first.
+- Auto-update is off for every marketplace in `core/plugins.lock`, including `claude-plugins-official`: the installer sets `"autoUpdate": false` on the marketplace's `extraKnownMarketplaces` entry in `~/.claude/settings.json`. Per [when auto-update runs](https://code.claude.com/docs/en/plugins/loading.md#when-auto-update-runs), that setting comes first, before the `/plugin` toggle in `known_marketplaces.json` and before the default (on for Anthropic's official marketplaces, off for others). `claude plugin marketplace add` rewrites the entry without `autoUpdate` (seen in 2.1.319), so the installer sets the field after every add.
+- An installed plugin is never updated by a plain run. When its approved commit moves (`install.sh --update <item>`), the installer runs `claude plugin marketplace update <marketplace>`, then `claude plugin uninstall --keep-data` and `claude plugin install` (a reinstall, because `claude plugin update` skips commits that keep the version string, see [versions and updates](https://code.claude.com/docs/en/plugins/loading.md#versions-and-updates)). The marketplace offers only its current commit, which is the commit the check reported; if upstream moved in between, the installed commit becomes the approved one, with a warning.
+- A new install refreshes its marketplace first (`name@marketplace` installs always do), so it gets the marketplace's current commit; on a first install that is the commit just approved.
+- Migration from the old pinned catalogs: a marketplace added from a folder in `build/claude-marketplaces/` is pointed at the author's GitHub repo in place (settings entry first, then `claude plugin marketplace add`), keeping its plugins and their data. `build/claude-marketplaces/` is removed once no marketplace uses it. Plugin records and settings are backed up first.
 
 ### Codex
 
-- Install: `codex plugin marketplace add <owner>/<repo>`, then `codex plugin add <plugin>@<marketplace>`; installed plugins get `[plugins."<plugin>@<marketplace>"]` in `~/.codex/config.toml` ([build plugins](https://developers.openai.com/codex/plugins/build.md), `codex-rs/cli/src/plugin_cmd.rs` and `marketplace_cmd.rs` in [openai/codex](https://github.com/openai/codex)). `openai-curated` is built in and synced by Codex itself.
-- Codex reads marketplaces from `.agents/plugins/marketplace.json` and `.claude-plugin/marketplace.json`, and plugin manifests from `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json` (`codex-rs/core-plugins/src/marketplace.rs`, `codex-rs/utils/plugins/src/plugin_namespace.rs`), so gsap-skills and harness install from their Claude marketplaces.
-- Auto-update: at startup Codex upgrades every configured Git marketplace and reinstalls the configured plugins from it (`maybe_start_plugin_startup_tasks_for_config` in `codex-rs/core-plugins/src/manager.rs`), and syncs `openai-curated`. There is no per-plugin switch. Each `install.sh` run also runs `codex plugin marketplace upgrade` and reports a change when an installed version moved.
-- Codex also reads `~/.agents/skills`, so a plugin Codex has natively (whichever marketplace it came from) is left out of that shared dir. The other agents that read it (Gemini CLI, Copilot, opencode, Amp, Devin, Cline, Droid, Zed, Crush, and Cursor) then miss that plugin's skills; Kiro and Antigravity have their own dirs.
+- Install: `codex plugin marketplace add <dir>`, then `codex plugin add <plugin>@<marketplace>` ([build plugins](https://developers.openai.com/codex/plugins/build.md), `codex-rs/cli/src/plugin_cmd.rs` and `marketplace_cmd.rs` in [openai/codex](https://github.com/openai/codex)). The marketplace is a local catalog the installer writes in `build/codex-marketplaces/<marketplace>/.agents/plugins/marketplace.json`, with the author's marketplace name and one entry whose source is `{"source": "url", "url": "https://github.com/<repo>.git", "sha": "<approved commit>"}` (`RawMarketplaceManifestPluginSourceObject` in `codex-rs/core-plugins/src/marketplace.rs`).
+- Why not the author's Git marketplace: at startup Codex upgrades every configured Git marketplace and reinstalls its plugins (`maybe_start_plugin_startup_tasks_for_config` in `codex-rs/core-plugins/src/manager.rs`, `upgrade_configured_git_marketplaces_with_mode` in `marketplace_upgrade.rs`); local marketplaces are not upgraded. A Git marketplace pinned with `--ref <full sha>` would also hold still (`git_remote_revision` returns a full sha as is), but taste-skill's `.agents/plugins/marketplace.json` points its plugin at the `main` branch, so only a catalog with a `sha` pins every plugin. `openai-curated` is synced by Codex itself and cannot be pinned, so superpowers comes from the pinned catalog as `superpowers@superpowers-dev` (the name of the author's own marketplace).
+- When the approved commit moves, the catalog is rewritten and the plugin reinstalled (`codex plugin remove`, then `codex plugin add`). A marketplace added earlier from the author's Git repo is replaced with the local catalog (`codex plugin marketplace remove`, then add) and its plugin reinstalled.
+- Codex reads plugin manifests from `.codex-plugin/plugin.json`, `.claude-plugin/plugin.json` or `.cursor-plugin/plugin.json` (`codex-rs/utils/plugins/src/plugin_namespace.rs`), so gsap-skills and harness install too.
+- Codex also reads `~/.agents/skills`, so a plugin Codex has natively (whichever marketplace it came from) is left out of that shared dir. Cursor then gets those skills in `~/.cursor/skills` (see [Duplicates](#duplicates)); the other agents that read the shared dir (Gemini CLI, Copilot, opencode, Amp, Devin, Cline, Droid, Zed, Crush) miss them. Kiro and Antigravity have their own dirs.
 
 ### Cursor
 
-- Plugins (Cursor Plugins and Agent Plugins) are installed from **Customize** in the app or `/plugin` in the CLI's interactive session; there is no documented non-interactive install. `~/.cursor/plugins/local` is for developing plugins, and symlinks out of it are skipped ([Cursor plugins](https://cursor.com/docs/plugins.md)). Team marketplaces (Teams and Enterprise) have Auto Refresh. So Cursor gets vendored skills; installing superpowers or gsap-skills from the Cursor Marketplace yourself would duplicate them.
+- Plugins (Cursor Plugins and Agent Plugins) are installed from **Customize** in the app or `/plugin` in the CLI's interactive session; there is no documented non-interactive install. `~/.cursor/plugins/local` is for developing plugins, and symlinks out of it are skipped ([Cursor plugins](https://cursor.com/docs/plugins.md)). So Cursor gets vendored skills at the approved commits, and nothing of agent-setup's auto-updates there; installing superpowers or gsap-skills from the Cursor Marketplace yourself would duplicate them.
 
 ### Antigravity
 
-- Install: `agy plugin install https://github.com/<owner>/<repo>`; plugins need a `plugin.json` or `.antigravity-plugin/plugin.json` and live in `~/.gemini/config/plugins/<name>/` ([Antigravity plugins](https://antigravity.google/docs/plugins)). Of the four, only superpowers ships an Antigravity manifest.
-- Updates: the docs describe no update command, and auto-update only for plugins installed in the Antigravity app. superpowers' README says to reinstall with the same command to update, so each `install.sh` run does that and reports a change when the version moved.
-- A plugin installed from another source (such as the app) is not replaced: warning, or `--fix-duplicates` uninstalls it first.
+- Install: `agy plugin install <dir>` from the vendor checkout of the repo, which is at the approved commit (whole tree); plugins need a `plugin.json` or `.antigravity-plugin/plugin.json` ([Antigravity plugins](https://antigravity.google/docs/plugins)). The docs list GitHub URLs (no ref or commit), local directories and the official marketplace as sources, so a local directory is the only pinnable one. Of the four plugins, only superpowers ships an Antigravity manifest.
+- Updates: the docs describe auto-update only for plugins installed in the Antigravity app. The installer reinstalls the plugin (`agy plugin uninstall`, then install) only when the version in the approved checkout differs from the installed one, which happens only after an approval.
+- A plugin installed from another source (such as the app) is not replaced: warning, or `--fix-duplicates` uninstalls it first. One installed earlier from `https://github.com/obra/superpowers` counts as the same source and is moved to the approved checkout when its version differs.
 
 ## Updates
 
-There is no background or scheduled job. Plugins update through the agents' own auto-update (Claude Code, Codex); everything else is refreshed whenever `install.sh` runs:
+There is no background or scheduled job, and nothing updates on its own. Each machine keeps the approved version of every item in `state/approved.json` (gitignored, backed up before each change, written by `install.sh` only). The lock files only say where items come from, so approving an update never needs a commit or push, and two machines may be on different approved versions.
 
-| What | How it follows upstream |
+| Item kind | Items | Approved version | Newer version |
+|---|---|---|---|
+| Skills/plugin repo | `anatomy`, `threejs-skills`, `taste-skill`, `gsap-skills`, `harness` | a commit | the default branch head (`git ls-remote`) |
+| Tag-tracked repo | `impeccable` | a commit and its tag | the highest tag matching `track=` |
+| Official-marketplace plugin repo | `superpowers` | a commit | the commit `anthropics/claude-plugins-official` pins for it |
+| MCP server | `playwright` (`"pin": {"npm": "@playwright/mcp"}`) | an npm version, written into the configs as `@playwright/mcp@<version>` | the npm `latest` dist-tag |
+| CLI tool | `codegraph`, `agent-reach` (`release=` in `tools.lock`) | a release tag | the GitHub latest release |
+
+**First install.** An item without an approved version gets one: the installed version when there is one (Claude Code's record of the plugin, the vendor checkout, the tool's `--version`), else the newest upstream. Offline, an item that cannot be resolved is left out with a warning until a later run can approve it. A Codex or Cursor config of `playwright` that an older agent-setup wrote (`@latest` or `@0.0.83`) moves to the approved version.
+
+**Plain run.** Installs exactly the approved versions and never moves past them: vendor checkouts, plugins, MCP server args and tools. At the end it prints the pending updates from the cache, without network.
+
+**Check.** `install.sh --check` resolves the newest version of every item (in parallel, with short timeouts) at most once per 24 hours, caches it in `state/updates.json`, and prints `name: old -> new <compare URL>`; `--force` checks now, `--json` prints `{"checked", "behind", "updates": [{"name", "approved", "latest", "url", "state"}]}`. It also fetches origin of `~/.agent-setup` and reports commits this checkout lacks (repo changes such as new rules or skills, not approvals). Without network it prints nothing new and retries after an hour.
+
+**Session-start notice.** The `update-notice.sh` hook (from `core/hooks.json`, event `SessionStart`) runs `install.sh --notice`, which uses the same cache. When something is pending and not skipped or snoozed, it returns text that tells the agent to list the updates (old -> new, compare links) to the user in their language and ask: update now, later, or skip this version; then to run `install.sh --update <names> --yes`, `--snooze <names>` or `--skip <name>@<version>`. Nothing pending: no output. It fails open (exit 0, no output on errors).
+
+| Agent | How the notice arrives |
 |---|---|
-| Vendored skills | Fetched at the default branch head (or latest `track=` tag) on every run |
-| Claude Code plugins | Claude Code auto-update; each run also runs its marketplace and plugin update commands |
-| Codex plugins | Codex refreshes marketplaces at startup; each run also runs `codex plugin marketplace upgrade` |
-| Antigravity plugin | Reinstalled from GitHub on every run |
-| MCP `playwright` | `npx -y @playwright/mcp@latest` resolves the latest at each start. A config an older agent-setup wrote with exactly the old pinned args (`@playwright/mcp@0.0.83`) is migrated (Claude Code, Codex, and every agent whose MCP file the installer merges); a value you changed is left alone |
-| `codegraph`, `agent-reach` | Installed at their latest release when missing; an installed copy is not upgraded |
-| `gh`, `jq`, `uv`, `node` | Installed when missing (Homebrew `--no-upgrade`, apt-get, dnf, pacman, winget); never upgraded |
+| Claude Code | `SessionStart` hook in `~/.claude/settings.json`, `hookSpecificOutput.additionalContext` |
+| Codex | `SessionStart` hook in `~/.codex/hooks.json`, same output (`codex-rs/hooks/src/events/session_start.rs`); trust it once with `/hooks` |
+| Cursor | the Claude Code hook, which Cursor runs as `sessionStart` ([third-party hooks](https://cursor.com/docs/reference/third-party-hooks.md)); the script sees `cursor_version` in the input and returns `additional_context` ([hooks](https://cursor.com/docs/hooks.md)). No `~/.cursor/hooks.json` entry, so it runs once |
+| Antigravity | `SessionStart` in `~/.gemini/config/hooks.json` through `antigravity-shim.py session`, returned as `injectSteps` with an `ephemeralMessage` ([hooks](https://antigravity.google/docs/hooks)) |
 
-A re-run when nothing changed upstream reports `0 change(s) made.`; a run where a skill repo or plugin moved counts each move as a change. `--update` is kept as an alias for a plain run. `--dry-run` writes nothing: it prints `would fetch the latest <repo>` and `would update ...` lines without counting them.
+**Answers.**
 
-Security: third-party code now updates without review. A new commit of a vendored skill reaches every agent on the next `install.sh` run, and a new plugin version reaches Claude Code and Codex on their next auto-update. Keep only sources you trust in the lock files.
+- `install.sh --update [names|all] [--yes]` checks upstream now, then asks y/N per item (old -> new and compare URL); with `--yes` it approves only the named items without asking (`--update --yes` without names is refused). It writes `state/approved.json` (keeping the previous version, so MCP configs at it are moved too) and runs the install, which moves only the approved items. `--dry-run` writes nothing.
+- `install.sh --snooze <names|all>` hides the items from the notice for 24 hours (`agent-setup` snoozes the new-commits note).
+- `install.sh --skip <name>@<version>` hides that version (as shown in the notice) until a newer one appears.
+
+The CLI tools `gh`, `jq`, `uv` and `node` are installed when missing (Homebrew `--no-upgrade`, apt-get, dnf, pacman, winget) and never upgraded; they are not approved items.
 
 ## Duplicates
 
 **Plugins.** Before installing `<plugin>@<marketplace>`, the installer lists the installed plugins (`claude plugin list --json`, `codex plugin list --json`, `agy plugin list --json`). When the same plugin name is installed from another marketplace or source (for example `superpowers@superpowers-dev`), it does not install a second copy and warns with the commands to switch, such as `claude plugin uninstall <plugin>@<other> && claude plugin install <plugin>@<marketplace>`. With `--fix-duplicates` it uninstalls the other copy and installs the one in `core/plugins.lock`; for Claude Code it first backs up `~/.claude/settings.json` and the plugin records, and removes the other marketplace when no installed plugin is left in it (never one in `core/plugins.lock`).
 
-**Native plugin and vendored copy.** An agent that has a plugin natively never gets its vendored skills: Claude Code never links them into `~/.claude/skills`, Antigravity's `~/.gemini/config/skills` skips the plugins `agy` installed, and `~/.agents/skills` skips the plugins Codex has. A link left from an earlier run is removed.
+**Native plugin and vendored copy.** An agent that has a plugin natively never gets its vendored skills: Claude Code never links them into `~/.claude/skills`, Antigravity's `~/.gemini/config/skills` skips the plugins `agy` installed, and `~/.agents/skills` skips the plugins Codex has. Cursor reads `~/.agents/skills` but not Codex's plugins, so the skills left out there are linked into `~/.cursor/skills` instead (and removed from there once Codex no longer has the plugin). A link left from an earlier run is removed.
 
 **Skills.** Each focus agent's adapter lists the skill folders in every directory the agent reads and warns when a name appears more than once and at least one copy is not managed by agent-setup (a managed copy is a link this run made, or a link into this repo in a directory this run did not link into). It also catches an unmanaged folder with the same name as a managed skill. The directories checked:
 
@@ -196,7 +217,7 @@ MCP servers are only ever added. An existing server with the same name is left a
 
 `core/hooks.json` lists each hook once: its script in `core/hooks/` (or a command), its Claude Code event, and a tool-name regex per agent. The installer renders it into each agent's format:
 
-- **Claude Code:** `settings.json`, running the scripts through the `~/.claude/hooks/` links. An older command for the same script is replaced, not duplicated.
+- **Claude Code:** `settings.json`, running the scripts through the `~/.claude/hooks/` links. An older command for the same script is replaced, not duplicated. `SessionStart` hooks print context for the new session (the update notice, see [Updates](#updates)).
 - **Codex:** merged into `~/.codex/hooks.json` (same schema as Claude Code; file edits are the `apply_patch` tool). Codex runs new or changed hooks only after you trust them once with `/hooks`.
 - **Cursor:** nothing extra; Cursor loads the Claude Code hooks from `~/.claude/settings.json`. Writing `~/.cursor/hooks.json` too would run them twice.
 - **Antigravity:** the `agent-setup` group in `~/.gemini/config/hooks.json`, run through `core/hooks/antigravity-shim.py`. The shim turns Antigravity's camelCase input into Claude Code's shape, turns a blocking exit 2 into `{"decision":"deny"}`, and always exits 0 with JSON. With no objection it returns `{"decision":"allow"}`, which the Antigravity docs define as "defer to the next hook or the default policy" (not auto-approve). PreToolUse cannot add context there, so English-only warnings are queued and injected as an `ephemeralMessage` on the next PreInvocation; the `codegraph prompt-hook` context is injected on PreInvocation once per new user message.
@@ -207,7 +228,7 @@ Hook commands use `/usr/bin/python3` when it works, else `python3`, `python` or 
 
 ## Install internals
 
-Steps, in order: tools, git identity, shell env, build (`build/AGENTS.full.md`, the latest skills in `vendor/`, and `build/skills/`), each agent (native plugins first, then links and config), then cleanup of unused `vendor/` dirs.
+Steps, in order: tools (base tools, then approving items without an approved version, then the `tools.lock` tools at their approved releases), git identity, shell env, build (`build/AGENTS.full.md`, the skills in `vendor/` at their approved commits, `build/skills/`, and `core/mcp.json` with the approved versions filled in), each agent (native plugins first, then links and config), then cleanup of unused `vendor/` dirs and the pending-updates summary.
 
 The repo must live at `~/.agent-setup`; the links and the Claude import stub depend on that path. `--allow-any-root` allows another checkout location (tests only).
 
@@ -248,9 +269,10 @@ Anything the installer replaces or edits is first saved under `~/.agent-setup-ba
 - Linux and Windows: app-only installs (no CLI, no config dir yet) of Cursor, Zed, Kiro, Devin and Antigravity are not detected, because detection looks in `/Applications` on macOS; select them with `--agents`.
 - `agent-reach setup` is only tested on macOS.
 - The Linux and Windows package-manager installs are exercised in CI only as a dry run.
-- Plugins: the Codex and Antigravity installs follow their docs and source; Codex was run in a scratch `CODEX_HOME`, Antigravity was not run (no `agy` here), and the shape of `agy plugin list --json` and whether `agy plugin install` over an installed plugin succeeds are unverified. `superpowers@openai-curated` was not installable in a scratch Codex home that had never started a session, hence the vendored fallback.
-- `superpowers@openai-curated` is OpenAI's copy of superpowers and can lag the upstream repo (6.3.0 against 7.0.2 in November 2026).
-- When Codex has a plugin natively, the other agents that read `~/.agents/skills` lose its vendored skills (see [Codex](#codex)).
+- Plugins: the shape of `agy plugin list --json` and of `codex plugin marketplace list --json` (the marketplace source) is read loosely and unverified.
+- The official Claude marketplace can lag the superpowers repo (7.0.0 against 7.0.2 in November 2026), and every agent follows the commit it offers.
+- When Codex has a plugin natively, the agents other than Cursor that read `~/.agents/skills` lose its vendored skills (see [Codex](#codex)).
+- Cursor may also import Claude Code's installed plugins (its third-party import setting); if it does, the plugin skills linked into `~/.cursor/skills` show up twice there. Unverified.
+- The pinned Codex catalogs (a `url` source with a `sha`), `codex plugin remove`/`add` as a reinstall, the Antigravity install from a local directory and the Antigravity `SessionStart` hook follow the docs and source but were only run against stub CLIs, not real Codex, Cursor or Antigravity installs.
 - Cursor installs plugins only through its UI; plugins you install there are not seen by the duplicate check.
-- A Claude Code or Codex plugin gets new commits only when its author bumps the version.
 - Links to removed skills or rules are not cleaned up; delete them by hand (links to plugin skills an agent now has natively are removed).

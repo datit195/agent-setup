@@ -84,12 +84,13 @@ link() {
 # _repo_link PATH: is PATH a symlink into this repo?
 _repo_link() { [ -L "$1" ] && case $(readlink "$1") in "$ROOT"/*) true ;; *) false ;; esac; }
 
-# unlink_managed SRC DEST: remove DEST when it is this repo's link (in copy
-# mode: an identical copy of SRC, moved to the backups); anything else is left.
+# unlink_managed SRC DEST [REASON]: remove DEST when it is this repo's link
+# (in copy mode: an identical copy of SRC, moved to the backups); anything
+# else is left.
 unlink_managed() {
   local src=$1 dest=$2
   if _repo_link "$dest"; then
-    act "remove $(pretty "$dest") (the agent has the native plugin)" rm -f "$dest"
+    act "remove $(pretty "$dest") (${3:-the agent has the native plugin})" rm -f "$dest"
   elif [ "$LINK_MODE" = copy ] && [ -d "$dest" ] && [ ! -L "$dest" ] && diff -rq -x .git "$src" "$dest" >/dev/null 2>&1; then
     backup_move "$dest"
   fi
@@ -150,6 +151,25 @@ EOF
 
 # The shared skills dir read by most agents (Codex among them).
 shared_skills() { link_skills "$HOME/.agents/skills" shared; }
+
+# link_codex_native_skills DEST AGENT: the shared skills dir leaves out the
+# vendored copies of plugins Codex has natively. Link those into DEST, a dir
+# only AGENT (Cursor) reads, so it still gets them; remove such a link once
+# Codex no longer has the plugin (the shared dir then has the copy).
+link_codex_native_skills() {
+  local dest=$1 agent=$2 name src skip plugin
+  while IFS=$'\t' read -r name src skip plugin; do
+    [ -n "$name" ] && [ -n "$plugin" ] || continue
+    case ",$skip," in *",$agent,"*) continue ;; esac
+    if _native_for shared "$plugin"; then
+      link "$src" "$dest/$name"
+    else
+      unlink_managed "$src" "$dest/$name" "the shared skills dir has it"
+    fi
+  done <<EOF
+$VENDORED_SKILLS
+EOF
+}
 
 # The shared instruction file every agent links to.
 link_instructions() { link "$ROOT/build/AGENTS.full.md" "$1"; }

@@ -1,5 +1,5 @@
 {
-  "_comment": "Hooks for every agent, from one place. script: a file in core/hooks/ (.py runs with Python 3, .sh with bash); command: a command line. event: the Claude Code event name. matcher: per-agent tool-name regex for PreToolUse; an agent without one does not get the hook. blocks: the hook may block (exit 2); other hooks never block. Cursor imports the Claude Code hooks from ~/.claude/settings.json.",
+  "_comment": "Hooks for every agent, from one place. script: a file in core/hooks/ (.py runs with Python 3, .sh with bash); command: a command line. event: the Claude Code event name. matcher: per-agent tool-name regex for PreToolUse; an agent without one does not get the hook. blocks: the hook may block (exit 2); other hooks never block. SessionStart hooks print context for the new session. Cursor imports the Claude Code hooks from ~/.claude/settings.json.",
   "hooks": [
     {
       "script": "issue-branch-guard.sh",
@@ -24,6 +24,11 @@
     {
       "command": "codegraph prompt-hook",
       "event": "UserPromptSubmit"
+    },
+    {
+      "script": "update-notice.sh",
+      "event": "SessionStart",
+      "timeout": 30
     }
   ]
 }

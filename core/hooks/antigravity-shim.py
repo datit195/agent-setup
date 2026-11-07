@@ -8,6 +8,8 @@
 #       PreInvocation, because PreToolUse cannot add context.
 #   antigravity-shim.py prompt [CMD...]  PreInvocation: injects kept context,
 #       and runs CMD as a UserPromptSubmit hook once per new user input.
+#   antigravity-shim.py session CMD...   SessionStart: runs CMD as a Claude
+#       SessionStart hook and injects the context it adds.
 #
 # CMD is a hook script path (.py runs with this Python, .sh with bash; a
 # missing script is skipped) or a command line.
@@ -126,6 +128,13 @@ def prompt(data, cmd, conv, cwd):
     return {"injectSteps": steps} if steps else {}
 
 
+def session(data, cmd, conv, cwd):
+    payload = {"hook_event_name": "SessionStart", "session_id": conv, "cwd": cwd, "source": "startup"}
+    rc, out, _ = run(cmd, payload, cwd)
+    ctx = context_of(out) if rc == 0 else None
+    return {"injectSteps": [{"ephemeralMessage": ctx}]} if ctx else {}
+
+
 def resolve(cmd):
     if len(cmd) == 1 and cmd[0].endswith((".py", ".sh")):
         if not os.path.isfile(cmd[0]):
@@ -151,6 +160,8 @@ def main():
             result = pretool(data, cmd, conv, cwd)
         elif mode == "prompt":
             result = prompt(data, cmd, conv, cwd)
+        elif mode == "session" and cmd:
+            result = session(data, cmd, conv, cwd)
     except Exception:
         pass
     sys.stdout.write(json.dumps(result) + "\n")

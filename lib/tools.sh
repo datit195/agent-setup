@@ -89,40 +89,87 @@ EOF
   [ "$OS" != windows ] || [ "$DRY_RUN" = 1 ] || log "NOTE: winget installs show up on PATH in a new terminal; open a new Git Bash if a tool is still not found"
 }
 
+# tool_line NAME: "install command<TAB>check<TAB>approved release" of NAME's
+# tools.lock line for this OS, with {tag} and {version} set to the approved
+# release. Fails when there is no line for this OS, or the line has a
+# release= but no approved version.
+tool_line() {
+  local name cmd check oses opts rel tag
+  while IFS=$'\t' read -r name cmd check oses opts <&3; do
+    [ "$name" = "$1" ] || continue
+    case ",${oses:-all}," in *",$OS,"* | *,all,*) ;; *) continue ;; esac
+    rel=$(opt_value "$opts" release)
+    tag=""
+    if [ -n "$rel" ]; then
+      tag=$(approved "$name")
+      [ -n "$tag" ] || return 1
+      cmd=${cmd//\{tag\}/$tag}
+      cmd=${cmd//\{version\}/${tag#v}}
+    fi
+    printf '%s\t%s\t%s\n' "$cmd" "$check" "${tag:--}"
+    return 0
+  done 3< <(lock_lines "$ROOT/tools/tools.lock")
+  return 1
+}
+
+# _tool_ok CHECK WANT: the check command works and (unless WANT is "-") prints that version.
+_tool_ok() {
+  local out
+  [ -n "$1" ] || return 1
+  out=$(bash -c "$1" 2>/dev/null </dev/null) || return 1
+  [ "$2" = - ] || case $out in *"${2#v}"*) ;; *) return 1 ;; esac
+}
+
+# install_tool NAME: install NAME (at its approved release) when it is
+# missing or at another version. Sets TOOL_RESULT: present, installed,
+# declined, failed, manual or skipped (no line for this OS, or not approved).
+install_tool() {
+  local line cmd check want label
+  TOOL_RESULT=skipped
+  line=$(tool_line "$1") || return 0
+  IFS=$'\t' read -r cmd check want <<EOF
+$line
+EOF
+  label=$1
+  [ "$want" = - ] || label="$1 $want"
+  if _tool_ok "$check" "$want"; then TOOL_RESULT=present; return 0; fi
+  if [ "$cmd" = MANUAL ]; then
+    log "NOTE: $1 must be installed by hand (see tools/tools.lock)"
+    TOOL_RESULT=manual
+    return 0
+  fi
+  TOOL_RESULT=installed
+  if [ "$DRY_RUN" = 1 ]; then act "install $label: $cmd"; return 0; fi
+  if ! ask "Install $label ($cmd)?"; then TOOL_RESULT=declined; return 0; fi
+  act "install $label" bash -c "$cmd"
+  if [ -n "$check" ] && ! _tool_ok "$check" "$want"; then TOOL_RESULT=failed; fi
+}
+
 install_tools() {
-  local name cmd check oses
-  local ok="" added="" manual="" declined="" failed=""
-  base_tools
-  while IFS=$'\t' read -r name cmd check oses <&3; do
+  local name ok="" added="" manual="" declined="" failed="" seen=$'\n'
+  while IFS=$'\t' read -r name _ <&3; do
     [ -n "$name" ] || continue
-    # Optional 4th column: comma-separated OSes the line applies to.
-    case ",${oses:-$OS}," in *",$OS,"*) ;; *) continue ;; esac
-    if [ -n "$check" ] && bash -c "$check" >/dev/null 2>&1; then
-      ok="$ok $name"
-      continue
-    fi
-    if [ "$cmd" = "MANUAL" ]; then
-      log "NOTE: $name must be installed by hand (see tools/tools.lock)"
-      manual="$manual $name"
-      continue
-    fi
-    if [ "$DRY_RUN" = 1 ]; then
-      act "install $name: $cmd"
-      continue
-    fi
-    if ! ask "Install $name ($cmd)?"; then
-      declined="$declined $name"
-      continue
-    fi
-    act "install $name" bash -c "$cmd"
-    if [ -n "$check" ] && ! bash -c "$check" >/dev/null 2>&1; then
-      failed="$failed $name"
-    else
-      added="$added $name"
-    fi
+    in_list "$seen" "$name" && continue
+    seen="$seen$name"$'\n'
+    install_tool "$name"
+    case $TOOL_RESULT in
+      present) ok="$ok $name" ;; installed) added="$added $name" ;; manual) manual="$manual $name" ;;
+      declined) declined="$declined $name" ;; failed) failed="$failed $name" ;;
+    esac
   done 3< <(lock_lines "$ROOT/tools/tools.lock")
   log "tools: present:${ok:- none} | installed:${added:- none} | manual:${manual:- none} | declined:${declined:- none} | failed:${failed:- none}"
   [ -z "$failed" ] || warn "tools failed to install:$failed"
+}
+
+# With --skip-tools: install only the tools this run's --update approved.
+install_updated_tools() {
+  local name seen=$'\n'
+  while IFS=$'\t' read -r name _ <&3; do
+    [ -n "$name" ] && ! in_list "$seen" "$name" && updating "$name" || continue
+    seen="$seen$name"$'\n'
+    install_tool "$name"
+    [ "$TOOL_RESULT" != failed ] || warn "tool $name failed to install"
+  done 3< <(lock_lines "$ROOT/tools/tools.lock")
 }
 
 # Set each git.conf key globally, only when it is not set yet.

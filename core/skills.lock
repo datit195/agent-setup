@@ -1,9 +1,10 @@
-# Third-party skills, vendored from their upstream (no pins). One per line, tab-separated: name, GitHub owner/repo, path in
-# repo, and optionally space-separated options:
+# Third-party skills, vendored from their upstream. One per line, tab-separated: name, GitHub owner/repo, path in repo,
+# and optionally space-separated options:
 #   skip=<agents>  (comma-separated) agents that must not get the skill.
-#   track=<glob>   follow the highest version tag matching <glob> instead of the default branch.
-# install.sh fetches the latest of each repo into vendor/<owner>__<repo>/ on every run. Entries from a repo in
-# core/plugins.lock are copies of that plugin: agents that have the plugin natively do not get them.
+#   track=<glob>   newer versions are the version tags matching <glob> instead of the default branch head.
+# Versions are not kept here: install.sh checks out each repo into vendor/<owner>__<repo>/ at the commit approved on this
+# machine (state/approved.json). Entries from a repo in core/plugins.lock are copies of that plugin: agents that have the
+# plugin natively do not get them.
 anatomy	wheresryan22/anatomy	.
 threejs-animation	cloudai-x/threejs-skills	skills/threejs-animation
 threejs-asset-pipeline	cloudai-x/threejs-skills	skills/threejs-asset-pipeline

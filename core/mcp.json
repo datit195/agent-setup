@@ -1,6 +1,9 @@
 {
+  "_comment": "\"pin\": {\"npm\": package} makes the server an approved item: {version} in args is replaced with the version approved on this machine (state/approved.json). oldArgs: args older agent-setup versions wrote; a config with exactly those args is replaced (the previously approved version is added automatically).",
   "servers": {
     "codegraph": {"command": "codegraph", "args": ["serve", "--mcp"], "env": {}, "autoApprove": true},
-    "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@latest"], "env": {}, "oldArgs": [["-y", "@playwright/mcp@0.0.83"]]}
+    "playwright": {"command": "npx", "args": ["-y", "@playwright/mcp@{version}"], "env": {},
+      "pin": {"npm": "@playwright/mcp", "compare": "https://github.com/microsoft/playwright-mcp/compare/v{old}...v{new}"},
+      "oldArgs": [["-y", "@playwright/mcp@latest"], ["-y", "@playwright/mcp@0.0.83"]]}
   }
 }

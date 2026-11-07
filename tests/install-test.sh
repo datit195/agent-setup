@@ -18,10 +18,49 @@ else
   HOME_NATIVE=$HOME
 fi
 echo "OS: $os  sandbox HOME: $HOME"
+export GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0
+git config --global user.name t
+git config --global user.email t@t
+git config --global init.defaultBranch master
+git config --global protocol.file.allow always
+gitc() { git -c core.autocrlf=false "$@"; }
 
-# Copy the work tree without generated dirs.
-mkdir -p "$HOME/.agent-setup"
-(cd "$repo" && tar -cf - --exclude=./build --exclude=./vendor .) | (cd "$HOME/.agent-setup" && tar -xf -)
+# Copy the work tree without generated dirs and the local state.
+A="$HOME/.agent-setup"
+mkdir -p "$A"
+(cd "$repo" && tar -cf - --exclude=./build --exclude=./vendor --exclude=./state --exclude=./.git .) | (cd "$A" && tar -xf -)
+
+# Fake upstream repos (https://github.com/fake/<name> is a local bare repo):
+# skills repos "one" and "two", and "plug", a plugin for Claude Code and Codex.
+up="$HOME/upstream"
+git config --global url."file:///${HOME_NATIVE#/}/upstream/".insteadOf https://github.com/fake/
+# commit_to NAME: add a commit to upstream NAME; prints the new commit.
+commit_to() {
+  local w="$HOME/work-$1"
+  [ -d "$w" ] || gitc clone -q "$up/$1.git" "$w" 2>/dev/null
+  date +%s%N >>"$w/changes" && gitc -C "$w" add -A && gitc -C "$w" commit -q -m change && gitc -C "$w" push -q origin HEAD:master
+  gitc -C "$w" rev-parse HEAD
+}
+for n in one two plug; do
+  w="$HOME/work-$n"
+  mkdir -p "$w/skills/fake-$n"
+  printf -- '---\nname: fake-%s\ndescription: test skill\n---\n' "$n" >"$w/skills/fake-$n/SKILL.md"
+  if [ "$n" = plug ]; then mkdir -p "$w/.claude-plugin" && printf '{"name":"fakeplug","version":"1.0.0"}\n' >"$w/.claude-plugin/plugin.json"; fi
+  gitc -C "$w" init -q && gitc -C "$w" add -A && gitc -C "$w" commit -q -m init
+  gitc clone -q --bare "$w" "$up/$n.git"
+  gitc -C "$up/$n.git" config uploadpack.allowFilter true
+  gitc -C "$up/$n.git" config uploadpack.allowAnySHA1InWant true
+  gitc -C "$w" remote add origin "$up/$n.git"
+done
+printf 'fake-one\tfake/one\tskills/fake-one\nfake-two\tfake/two\tskills/fake-two\nfake-plug\tfake/plug\tskills/fake-plug\n' >>"$A/core/skills.lock"
+printf 'fakeplug\tfake/plug\tclaude=fakeplug@fakeplug codex=fakeplug@fakeplug\n' >>"$A/core/plugins.lock"
+
+# The sandbox repo is a git checkout whose origin is a local bare repo, so the
+# "origin has new commits" notice can be tested.
+gitc -C "$A" init -q && gitc -C "$A" add -A && gitc -C "$A" commit -q -m sandbox
+gitc clone -q --bare "$A" "$HOME/self.git"
+gitc -C "$A" remote add origin "$HOME/self.git" && gitc -C "$A" fetch -q origin && gitc -C "$A" remote set-head origin master >/dev/null
+gitc -C "$A" branch -q -u origin/master
 
 # Stub claude, codex and agy CLIs on PATH, so the MCP and native plugin steps
 # run (tests/*-stub.sh).
@@ -35,13 +74,16 @@ export PATH="$HOME/stub-bin:$PATH"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "ok: $*"; }
 out="$HOME/.install-test-out"
-run() { "$HOME/.agent-setup/install.sh" --agents "$agents" "$@" >"$out" 2>&1 || { cat "$out"; fail "install.sh $* exited non-zero"; }; cat "$out"; }
-# Every path under HOME with a checksum, except the repo's .git, the test
-# output and the macOS Python cache (~/Library/Caches).
+inst() { "$A/install.sh" "$@" >"$out" 2>&1 || { cat "$out"; fail "install.sh $* exited non-zero"; }; cat "$out"; }
+run() { inst --agents "$agents" "$@"; }
+# Every path under HOME with a checksum, except git dirs, the test output,
+# the fake upstream and the macOS Python cache (~/Library/Caches).
 snapshot() {
-  (cd "$HOME" && find . \( -path ./.agent-setup/.git -o -path ./.install-test-out -o -path ./Library \) -prune -o -print | LC_ALL=C sort |
+  (cd "$HOME" && find . \( -path ./.agent-setup/.git -o -path ./.install-test-out -o -path ./Library -o -path ./upstream -o -path ./self.git -o -name 'work-*' \) -prune -o -print | LC_ALL=C sort |
     while IFS= read -r p; do if [ -f "$p" ] && [ ! -L "$p" ]; then printf '%s %s\n' "$p" "$(cksum <"$p")"; else printf '%s\n' "$p"; fi; done)
 }
+approved() { jq -r --arg n "$1" '.[$n].version // empty' "$A/state/approved.json"; }
+vendor_head() { git -C "$A/vendor/$1" rev-parse HEAD; }
 
 # User values that the installer must keep, and an old-style Claude hook entry
 # that it must replace (not duplicate).
@@ -56,38 +98,47 @@ printf '%s\n' '{"agentMode":"manual","theme":"mine"}' >"$HOME/.gemini/antigravit
 chmod 600 "$HOME/.gemini/antigravity-cli/settings.json"
 printf '{"hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":"/usr/bin/python3 -I %s/.claude/hooks/english-only-warn.py"}]}]}}\n' "$HOME_NATIVE" >"$HOME/.claude/settings.json"
 
-# What an earlier, pinning agent-setup left behind, to be migrated: playwright
-# pinned to 0.0.83 in Claude Code, Codex and Cursor; harness installed from a
-# local pinned catalog in build/claude-marketplaces/ (with plugin data); and a
+# What earlier agent-setup versions left behind, to be migrated: playwright
+# pinned to 0.0.83 (Claude Code, Cursor) or at @latest (Codex); harness
+# installed from a local pinned catalog in build/claude-marketplaces/ (with
+# plugin data); taste-skill in Codex from the author's Git marketplace; and a
 # skill link into an old vendor/<repo>@<sha> dir.
 old_pw='["-y","@playwright/mcp@0.0.83"]'
 printf '{"mcpServers":{"playwright":{"type":"stdio","command":"npx","args":%s,"env":{}}}}\n' "$old_pw" >"$HOME/.claude.json"
-printf '\n[mcp_servers.playwright]\ncommand = "npx"\nargs = ["-y", "@playwright/mcp@0.0.83"]\n' >>"$HOME/.codex/config.toml"
+printf '\n[mcp_servers.playwright]\ncommand = "npx"\nargs = ["-y", "@playwright/mcp@latest"]\n' >>"$HOME/.codex/config.toml"
 mkdir -p "$HOME/.cursor"
 printf '{"mcpServers":{"playwright":{"type":"stdio","command":"npx","args":%s,"env":{}}}}\n' "$old_pw" >"$HOME/.cursor/mcp.json"
-catalog="$HOME/.agent-setup/build/claude-marketplaces/harness-marketplace"
+catalog="$A/build/claude-marketplaces/harness-marketplace"
 mkdir -p "$catalog/.claude-plugin"
-printf '%s\n' '{"name":"harness-marketplace","plugins":[{"name":"harness","version":"1.0.0","source":{"source":"github","repo":"revfactory/harness","sha":"92d9f1b29e7af81acebf51a9fcd1832e739a1414"}}]}' >"$catalog/.claude-plugin/marketplace.json"
+harness_head=$(git ls-remote https://github.com/revfactory/harness.git HEAD | cut -f1)
+printf '{"name":"harness-marketplace","plugins":[{"name":"harness","version":"1.0.0","source":{"source":"github","repo":"revfactory/harness","sha":"%s"}}]}\n' "$harness_head" >"$catalog/.claude-plugin/marketplace.json"
 claude plugin marketplace add "$catalog" >/dev/null
 claude plugin install harness@harness-marketplace >/dev/null
 mkdir -p "$HOME/.claude/plugins/data/harness-harness-marketplace" && echo mine >"$HOME/.claude/plugins/data/harness-harness-marketplace/keep"
-oldvendor="$HOME/.agent-setup/vendor/wheresryan22__anatomy@1482e8469b0a9e0d8cc18ea2740a01423d29ae80"
+codex plugin marketplace add Leonxlnx/taste-skill >/dev/null
+codex plugin add taste-skill@taste-skill >/dev/null
+oldvendor="$A/vendor/wheresryan22__anatomy@1482e8469b0a9e0d8cc18ea2740a01423d29ae80"
 mkdir -p "$oldvendor" "$HOME/.agents/skills" && printf -- '---\nname: anatomy\n---\n' >"$oldvendor/SKILL.md"
 ln -s "$oldvendor" "$HOME/.agents/skills/anatomy"
-rm -f "$HOME/.claude-stub.log"
+rm -f "$HOME/.claude-stub.log" "$HOME/.codex-stub.log"
 
 echo "== dry run on a fresh HOME"
 before=$(snapshot)
 run --dry-run --skip-tools "$@"
 after=$(snapshot)
 [ "$before" = "$after" ] || { diff <(printf '%s\n' "$before") <(printf '%s\n' "$after") || true; fail "--dry-run changed files on a fresh HOME"; }
-grep -q 'fetch the latest wheresryan22/anatomy' "$out" || fail "dry run does not say it fetches the latest skills"
+grep -q 'fetch wheresryan22/anatomy at [0-9a-f]\{12\}' "$out" || fail "dry run does not say it fetches anatomy at the approved commit"
+grep -q '^approve one [0-9a-f]\{12\} (newest upstream)' "$out" || fail "dry run does not show the first approval"
 pass "dry run on a fresh HOME changed nothing"
 
 echo "== first run"
 run --yes --skip-tools "$@"
 grep -q 'change(s) made' "$out" || fail "no summary in first run"
-pass "first run succeeded"
+[ "$(approved one)" = "$(git -C "$up/one.git" rev-parse HEAD)" ] || fail "one is not approved at its upstream head"
+[ "$(approved harness)" = "$harness_head" ] || fail "harness: the installed Claude plugin commit was not approved"
+case $(approved playwright) in [0-9]*.[0-9]*) ;; *) fail "playwright not approved at a version: $(approved playwright)" ;; esac
+[ "$(vendor_head fake__one)" = "$(approved one)" ] || fail "vendor/fake__one is not at the approved commit"
+pass "first run: approves the installed versions, else the newest upstream (state/approved.json)"
 
 echo "== second run"
 run --yes --skip-tools "$@"
@@ -103,29 +154,32 @@ pass "dry run after install: 0 changes, nothing changed"
 
 echo "== results"
 for f in .claude/CLAUDE.md .claude/rules/language.md .claude/rules/claude-extras.md .claude/rules/coordinator-mode.md \
-  .claude/hooks/issue-branch-guard.sh .claude/hooks/english-only-warn.py .claude/skills/anatomy/SKILL.md \
-  .agents/skills/anatomy/SKILL.md .agents/skills/impeccable/SKILL.md .agents/skills/brainstorming/SKILL.md \
+  .claude/hooks/issue-branch-guard.sh .claude/hooks/english-only-warn.py .claude/hooks/update-notice.sh .claude/skills/anatomy/SKILL.md \
+  .agents/skills/anatomy/SKILL.md .agents/skills/impeccable/SKILL.md .agents/skills/fake-one/SKILL.md \
   .gemini/config/skills/evolve/SKILL.md .gemini/config/skills/gsap-core/SKILL.md .kiro/skills/brainstorming/SKILL.md \
-  .kiro/skills/taste-skill/SKILL.md .codex/AGENTS.md .gemini/GEMINI.md .config/opencode/AGENTS.md; do
+  .kiro/skills/taste-skill/SKILL.md .codex/AGENTS.md .gemini/GEMINI.md .config/opencode/AGENTS.md \
+  .cursor/skills/gsap-core/SKILL.md .cursor/skills/brainstorming/SKILL.md .cursor/skills/fake-plug/SKILL.md; do
   [ -f "$HOME/$f" ] || fail "missing ~/$f"
 done
-# No agent gets a skill twice: not from its native plugin and a vendored copy.
-for f in .claude/skills/taste-skill .claude/skills/brainstorming .claude/skills/harness \
-  .agents/skills/taste-skill .agents/skills/gsap-core .agents/skills/harness .agents/skills/evolve \
-  .gemini/config/skills/brainstorming; do
-  [ ! -e "$HOME/$f" ] && [ ! -L "$HOME/$f" ] || fail "~/$f exists; that agent has the plugin natively"
+# No agent gets a skill twice: not from its native plugin and a vendored copy,
+# and Cursor gets Codex's native plugins' skills only in ~/.cursor/skills.
+for f in .claude/skills/taste-skill .claude/skills/brainstorming .claude/skills/harness .claude/skills/fake-plug \
+  .agents/skills/taste-skill .agents/skills/gsap-core .agents/skills/harness .agents/skills/evolve .agents/skills/brainstorming \
+  .agents/skills/fake-plug .gemini/config/skills/brainstorming .cursor/skills/anatomy; do
+  [ ! -e "$HOME/$f" ] && [ ! -L "$HOME/$f" ] || fail "~/$f exists; that agent would have the skill twice"
 done
 if [ -L "$HOME/.agents/skills/anatomy" ]; then
   case $(readlink "$HOME/.agents/skills/anatomy") in */vendor/wheresryan22__anatomy) ;; *) fail "anatomy link not moved to the per-repo vendor dir" ;; esac
 fi
 [ ! -e "$oldvendor" ] || fail "the old pinned vendor dir was not removed"
-for d in "$HOME"/.agent-setup/vendor/*; do
+for d in "$A"/vendor/*; do
   case $(basename "$d") in *@*) fail "old pinned vendor dir left: $d" ;; esac
 done
-pass "skills: per-repo vendor dirs, old pinned dirs removed, no skill twice per agent"
+grep -q "skill 'gsap-core'\|skill 'brainstorming'" "$out" && fail "a skill duplicate was reported"
+pass "skills: per-repo vendor dirs, no skill twice per agent, Cursor gets the skills of Codex's native plugins"
 grep -q 'allow_implicit_invocation: false' "$HOME/.agents/skills/impeccable/agents/openai.yaml" || fail "impeccable is not explicit-only for Codex"
 grep -q '^@~/.agent-setup/core/AGENTS.md' "$HOME/.claude/CLAUDE.md" || fail "~/.claude/CLAUDE.md is not the import stub"
-size=$(wc -c <"$HOME/.agent-setup/build/AGENTS.full.md" | tr -d ' ')
+size=$(wc -c <"$A/build/AGENTS.full.md" | tr -d ' ')
 [ "$size" -lt 24000 ] || fail "build/AGENTS.full.md is $size bytes (Antigravity limit 24,000)"
 if [ "$os" = windows ]; then zed="$APPDATA/Zed"; else zed="$HOME/.config/zed"; fi
 [ -f "$zed/AGENTS.md" ] || fail "missing Zed AGENTS.md in $zed"
@@ -136,15 +190,18 @@ pass "key files exist (shell rc: ~/$rc, AGENTS.full.md: $size bytes)"
 settings="$HOME/.claude/settings.json"
 py_cmd=$(jq -r '.hooks.PreToolUse[].hooks[].command | select(test("english-only-warn"))' "$settings")
 guard_cmd=$(jq -r '.hooks.PreToolUse[].hooks[].command | select(test("issue-branch-guard"))' "$settings")
+notice_cmd=$(jq -r '.hooks.SessionStart[].hooks[].command | select(test("update-notice"))' "$settings")
 echo "english-only hook: $py_cmd"
 echo "guard hook:        $guard_cmd"
-[ -n "$py_cmd" ] && [ -n "$guard_cmd" ] || fail "hooks missing in settings.json"
+echo "notice hook:       $notice_cmd"
+[ -n "$py_cmd" ] && [ -n "$guard_cmd" ] && [ -n "$notice_cmd" ] || fail "hooks missing in settings.json"
 [ "$(printf '%s\n' "$py_cmd" | wc -l | tr -d ' ')" = 1 ] || fail "the old english-only hook entry was not replaced"
 case "$py_cmd" in *"$HOME_NATIVE/.claude/hooks/english-only-warn.py"*) ;; *) fail "english-only hook path is not under HOME" ;; esac
 jq -e '.permissions.allow | index("mcp__codegraph__*")' "$settings" >/dev/null || fail "mcp__codegraph__* not allowed"
 jq -e '.env.IMPECCABLE_NO_TELEMETRY == "1" and .permissions.defaultMode == "auto"' "$settings" >/dev/null || fail "Claude env/defaultMode missing"
 pass "Claude settings: hooks replaced, MCP auto-approval, env"
 
+pw=$(approved playwright)
 # Codex config.toml: parsed with tomllib when some Python has it.
 toml_py=""
 for c in python3 python "py -3"; do
@@ -155,7 +212,7 @@ toml="$HOME/.codex/config.toml"
 cat "$toml"
 if [ -n "$toml_py" ]; then
   # shellcheck disable=SC2086
-  $toml_py - "$(if [ "$os" = windows ]; then cygpath -m "$toml"; else printf '%s' "$toml"; fi)" <<'EOF' || fail "codex config.toml check failed"
+  $toml_py - "$(if [ "$os" = windows ]; then cygpath -m "$toml"; else printf '%s' "$toml"; fi)" "$pw" <<'EOF' || fail "codex config.toml check failed"
 import sys, tomllib
 c = tomllib.load(open(sys.argv[1], "rb"))
 assert c["model"] == "o3", "user model lost"
@@ -165,7 +222,7 @@ assert c["shell_environment_policy"]["set"]["IMPECCABLE_NO_TELEMETRY"] == "1"
 cg = c["mcp_servers"]["codegraph"]
 assert cg["command"] == "my-codegraph" and "args" not in cg, "user MCP server changed"
 assert cg["default_tools_approval_mode"] == "auto"
-assert c["mcp_servers"]["playwright"]["args"] == ["-y", "@playwright/mcp@latest"], "old playwright pin not migrated"
+assert c["mcp_servers"]["playwright"]["args"] == ["-y", "@playwright/mcp@" + sys.argv[2]], "playwright @latest not moved to the approved version"
 assert "default_tools_approval_mode" not in c["mcp_servers"]["playwright"]
 EOF
   pass "codex config.toml parses (tomllib via $toml_py), user values kept, keys added"
@@ -175,7 +232,7 @@ else
 fi
 
 jq -e '(.hooks.Stop | length) == 1 and (.hooks.PreToolUse | length) == 2 and (.hooks.UserPromptSubmit | length) == 1
-  and (.hooks.PreToolUse[0].matcher == "^apply_patch$")' "$HOME/.codex/hooks.json" >/dev/null || fail "codex hooks.json"
+  and (.hooks.SessionStart | length) == 1 and (.hooks.PreToolUse[0].matcher == "^apply_patch$")' "$HOME/.codex/hooks.json" >/dev/null || fail "codex hooks.json"
 jq -e '.approvalMode == "allowlist" and .permissions.allow == ["Shell(ls)", "Mcp(codegraph:*)"]' "$cursor_cfg" >/dev/null || fail "cursor cli-config.json"
 ag="$HOME/.gemini/antigravity-cli/settings.json"
 jq -e '.agentMode == "manual" and .theme == "mine" and .permissions.allow == ["mcp(codegraph/*)"]' "$ag" >/dev/null || fail "antigravity settings.json"
@@ -184,22 +241,24 @@ if [ "$os" != windows ]; then
   [ "$mode" = 600 ] || fail "antigravity settings.json mode is $mode, not 600"
 fi
 agh="$HOME/.gemini/config/hooks.json"
-jq -e '(.["agent-setup"].PreToolUse | length) == 2 and (.["agent-setup"].PreInvocation | length) == 1' "$agh" >/dev/null || fail "antigravity hooks.json"
+jq -e '(.["agent-setup"].PreToolUse | length) == 2 and (.["agent-setup"].PreInvocation | length) == 1 and (.["agent-setup"].SessionStart | length) == 1' "$agh" >/dev/null || fail "antigravity hooks.json"
 pass "codex hooks.json, cursor cli-config, antigravity settings and hooks.json (user values kept)"
 
 echo "== hook commands (run with bash, as Claude Code does)"
 proj="$HOME/proj"
 mkdir -p "$proj"
 git -C "$proj" init -q -b master
-git -C "$proj" -c user.name=t -c user.email=t@t commit -q --allow-empty -m init
+git -C "$proj" commit -q --allow-empty -m init
 git -C "$proj" remote add origin https://github.com/example/proj.git
 P="$HOME_NATIVE/proj"
 vi='Xin chào thế giới'   # JSON escapes keep this file ASCII
 codex_guard=$(jq -r '.hooks.PreToolUse[].hooks[].command | select(test("issue-branch-guard"))' "$HOME/.codex/hooks.json")
 codex_py=$(jq -r '.hooks.PreToolUse[].hooks[].command | select(test("english-only-warn"))' "$HOME/.codex/hooks.json")
+codex_notice=$(jq -r '.hooks.SessionStart[].hooks[].command' "$HOME/.codex/hooks.json")
 ag_guard=$(jq -r '.["agent-setup"].PreToolUse[].hooks[].command | select(test("issue-branch-guard"))' "$agh")
 ag_py=$(jq -r '.["agent-setup"].PreToolUse[].hooks[].command | select(test("english-only-warn"))' "$agh")
 ag_prompt=$(jq -r '.["agent-setup"].PreInvocation[0].command' "$agh")
+ag_session=$(jq -r '.["agent-setup"].SessionStart[0].command' "$agh")
 
 # expect_rc RC CMD INPUT: run CMD with INPUT on stdin; its exit code must be RC.
 expect_rc() {
@@ -238,7 +297,7 @@ expect_rc 0 "$ag_prompt" '{"conversationId":"c2","lastUserInput":"hello"}'
 jq -e '.injectSteps[0].ephemeralMessage | test("English-only")' "$HOME/.hook-out" >/dev/null || fail "antigravity did not inject the warning: $(cat "$HOME/.hook-out")"
 pass "english-only warns on Vietnamese: Claude, Codex, Cursor, Antigravity (on the next PreInvocation)"
 
-for c in "$ag_guard" "$ag_py" "$ag_prompt"; do
+for c in "$ag_guard" "$ag_py" "$ag_prompt" "$ag_session"; do
   for input in 'not json' '' '[1,2]'; do
     expect_rc 0 "$c" "$input"
     jq -e 'type == "object"' "$HOME/.hook-out" >/dev/null || fail "antigravity hook printed no JSON object for '$input': $(cat "$HOME/.hook-out")"
@@ -246,87 +305,178 @@ for c in "$ag_guard" "$ag_py" "$ag_prompt"; do
 done
 pass "antigravity hooks print a JSON object and exit 0 on garbage input"
 
+# The session-start notice for each agent shape: CLAUDE, CODEX, CURSOR, ANTIGRAVITY inputs.
+claude_start='{"hook_event_name":"SessionStart","session_id":"s1","source":"startup","cwd":"/tmp"}'
+cursor_start='{"hook_event_name":"sessionStart","session_id":"s1","cursor_version":"2.0.0","workspace_roots":["/tmp"]}'
+ag_start='{"conversationId":"c9","workspacePaths":["/tmp"]}'
+notices() {   # notices: run every agent's SessionStart command; outputs in ~/.notice-<agent>
+  expect_rc 0 "$notice_cmd" "$claude_start"; cp "$HOME/.hook-out" "$HOME/.notice-claude"
+  expect_rc 0 "$codex_notice" "$claude_start"; cp "$HOME/.hook-out" "$HOME/.notice-codex"
+  expect_rc 0 "$notice_cmd" "$cursor_start"; cp "$HOME/.hook-out" "$HOME/.notice-cursor"
+  expect_rc 0 "$ag_session" "$ag_start"; cp "$HOME/.hook-out" "$HOME/.notice-antigravity"
+}
+notices
+[ ! -s "$HOME/.notice-claude" ] && [ ! -s "$HOME/.notice-codex" ] && [ ! -s "$HOME/.notice-cursor" ] || fail "a session-start notice without pending updates: $(cat "$HOME"/.notice-*)"
+jq -e '. == {}' "$HOME/.notice-antigravity" >/dev/null || fail "antigravity session notice without updates: $(cat "$HOME/.notice-antigravity")"
+pass "session-start hooks are silent when nothing is pending (Claude, Codex, Cursor, Antigravity)"
+
 # Missing hook scripts never block (Claude, Codex, Antigravity commands).
 git -C "$proj" switch -q master
 mv "$HOME/.claude/hooks" "$HOME/.claude/hooks.off"
-mv "$HOME/.agent-setup/core/hooks" "$HOME/.agent-setup/core/hooks.off"
+mv "$A/core/hooks" "$A/core/hooks.off"
 expect_rc 0 "$guard_cmd" "$claude_edit"
 expect_rc 0 "$py_cmd" '{"tool_name":"Write","tool_input":{"file_path":"/tmp/x.md","content":"x"}}'
+expect_rc 0 "$notice_cmd" "$claude_start"
 # On Windows the Codex guard is a plain 'bash "<script>"': exit 127, which does not block.
 rc=0; printf '%s' "$codex_patch" | bash -c "$codex_guard" >/dev/null 2>&1 || rc=$?
 [ "$rc" != 2 ] || fail "codex guard blocks without its script"
 expect_rc 0 "$codex_py" '{}'
 expect_rc 0 "$ag_guard" "$ag_write"
 jq -e '.decision == "allow"' "$HOME/.hook-out" >/dev/null || fail "antigravity without scripts: $(cat "$HOME/.hook-out")"
-mv "$HOME/.agent-setup/core/hooks.off" "$HOME/.agent-setup/core/hooks"
+expect_rc 0 "$ag_session" "$ag_start"
+mv "$A/core/hooks.off" "$A/core/hooks"
 mv "$HOME/.claude/hooks.off" "$HOME/.claude/hooks"
 pass "hook commands exit 0 when their scripts are missing"
 
 echo "== native plugins (stub claude, codex and agy CLIs)"
-inst="$HOME/.claude/plugins/installed_plugins.json"
+inst_json="$HOME/.claude/plugins/installed_plugins.json"
 known="$HOME/.claude/plugins/known_marketplaces.json"
 stublog="$HOME/.claude-stub.log"
-plock="$HOME/.agent-setup/core/plugins.lock"
-grep -Eq '[0-9a-f]{40}' "$plock" "$HOME/.agent-setup/core/skills.lock" && fail "a lock file still pins a commit"
-for id in superpowers@claude-plugins-official taste-skill@taste-skill gsap-skills@gsap-skills harness@harness-marketplace; do
-  jq -e --arg i "$id" '.plugins | has($i)' "$inst" >/dev/null || fail "claude: $id not installed"
+for f in core/plugins.lock core/skills.lock tools/tools.lock; do
+  grep -Eq '[0-9a-f]{40}|releases/download/v[0-9]|/v[0-9]+\.[0-9]' "$A/$f" && fail "$f holds a pinned version"
 done
-for m in taste-skill:Leonxlnx/taste-skill gsap-skills:greensock/gsap-skills harness-marketplace:revfactory/harness; do
+jq -e '.servers.playwright.args == ["-y", "@playwright/mcp@{version}"]' "$A/core/mcp.json" >/dev/null || fail "core/mcp.json pins playwright"
+for id in superpowers@claude-plugins-official taste-skill@taste-skill gsap-skills@gsap-skills harness@harness-marketplace fakeplug@fakeplug; do
+  jq -e --arg i "$id" '.plugins | has($i)' "$inst_json" >/dev/null || fail "claude: $id not installed"
+done
+for m in taste-skill:Leonxlnx/taste-skill gsap-skills:greensock/gsap-skills harness-marketplace:revfactory/harness claude-plugins-official:anthropics/claude-plugins-official; do
   jq -e --arg m "${m%%:*}" --arg r "${m#*:}" '.[$m].source == {source: "github", repo: $r}' "$known" >/dev/null || fail "claude: marketplace ${m%%:*} is not from GitHub ${m#*:}"
-  jq -e --arg m "${m%%:*}" '.extraKnownMarketplaces[$m].autoUpdate == true' "$settings" >/dev/null || fail "claude: auto-update is not on for ${m%%:*}"
+  jq -e --arg m "${m%%:*}" '.extraKnownMarketplaces[$m].autoUpdate == false' "$settings" >/dev/null || fail "claude: auto-update is not off for ${m%%:*}"
 done
-jq -e '.extraKnownMarketplaces["claude-plugins-official"] | not' "$settings" >/dev/null || fail "claude: the official marketplace got a settings entry"
-[ "$(claude plugin marketplace list --json | jq length)" = 4 ] || fail "claude: not exactly 4 marketplaces"
+jq -e '[.extraKnownMarketplaces[] | .autoUpdate] | all(. == false)' "$settings" >/dev/null || fail "claude: a marketplace may auto-update"
+[ "$(claude plugin marketplace list --json | jq length)" = 5 ] || fail "claude: not exactly 5 marketplaces"
 grep -q 'plugin install harness' "$stublog" && fail "claude: harness was reinstalled instead of re-pointed"
 [ "$(cat "$HOME/.claude/plugins/data/harness-harness-marketplace/keep")" = mine ] || fail "claude: harness plugin data lost"
-[ ! -e "$HOME/.agent-setup/build/claude-marketplaces" ] || fail "build/claude-marketplaces was not removed"
-jq -e '.mcpServers.playwright.args == ["-y", "@playwright/mcp@latest"]' "$HOME/.claude.json" >/dev/null || fail "claude: old playwright pin not migrated"
-jq -e '.mcpServers.playwright.args == ["-y", "@playwright/mcp@latest"]' "$HOME/.cursor/mcp.json" >/dev/null || fail "cursor: old playwright pin not migrated"
-pass "claude: authors' GitHub marketplaces with auto-update, pinned catalog migrated in place (data kept), playwright follows latest"
+[ ! -e "$A/build/claude-marketplaces" ] || fail "build/claude-marketplaces was not removed"
+jq -e --arg a "@playwright/mcp@$pw" '.mcpServers.playwright.args == ["-y", $a]' "$HOME/.claude.json" >/dev/null || fail "claude: old playwright pin not moved to the approved version"
+jq -e --arg a "@playwright/mcp@$pw" '.mcpServers.playwright.args == ["-y", $a]' "$HOME/.cursor/mcp.json" >/dev/null || fail "cursor: old playwright pin not moved to the approved version"
+pass "claude: authors' marketplaces with auto-update off (official too), pinned catalog migrated in place (data kept), playwright at the approved version"
 cstate="$HOME/.codex/stub-state.json"
-jq -e '.plugins | keys == ["gsap-skills@gsap-skills", "harness@harness-marketplace", "taste-skill@taste-skill"]' "$cstate" >/dev/null || fail "codex: native plugins: $(cat "$cstate")"
-jq -e '.marketplaces | keys == ["gsap-skills", "harness-marketplace", "taste-skill"]' "$cstate" >/dev/null || fail "codex: marketplaces"
-grep -q 'NOTE: codex: superpowers@openai-curated is not available yet' "$out" || fail "codex: no note about openai-curated"
-jq -e '.superpowers.source == "https://github.com/obra/superpowers"' "$HOME/.gemini/stub-plugins.json" >/dev/null || fail "antigravity: superpowers not installed from GitHub"
-pass "codex: taste-skill, gsap-skills, harness native (superpowers vendored until openai-curated has it); antigravity: superpowers native"
+jq -e '.plugins | keys == ["fakeplug@fakeplug", "gsap-skills@gsap-skills", "harness@harness-marketplace", "superpowers@superpowers-dev", "taste-skill@taste-skill"]' "$cstate" >/dev/null || fail "codex: native plugins: $(cat "$cstate")"
+jq -e '.marketplaces | to_entries | all(.value | test("build/codex-marketplaces/"))' "$cstate" >/dev/null || fail "codex: a marketplace is not a pinned local catalog: $(cat "$cstate")"
+[ "$(jq -r '.plugins["taste-skill@taste-skill"]' "$cstate")" = "$(approved taste-skill)" ] || fail "codex: taste-skill not reinstalled at the approved commit"
+[ "$(jq -r '.plugins["fakeplug@fakeplug"]' "$cstate")" = "$(approved plug)" ] || fail "codex: fakeplug not at the approved commit"
+grep -q 'plugin marketplace remove taste-skill' "$HOME/.codex-stub.log" || fail "codex: the Git marketplace was not replaced"
+jq -e --arg d "$A/vendor/obra__superpowers" '.superpowers.source | gsub("\\\\"; "/") | ascii_downcase | endswith("vendor/obra__superpowers")' "$HOME/.gemini/stub-plugins.json" >/dev/null || fail "antigravity: superpowers not installed from the vendor checkout: $(cat "$HOME/.gemini/stub-plugins.json")"
+pass "codex: every plugin from a pinned local catalog (Git marketplace migrated); antigravity: superpowers from the approved checkout"
 
-echo "== upstream moves (STUB_VERSION=2.0.0)"
-export STUB_VERSION=2.0.0
+echo "== upstream moves: nothing changes without approval"
+new_one=$(commit_to one) new_two=$(commit_to two) new_plug=$(commit_to plug)
+old_one=$(approved one) old_two=$(approved two) old_plug=$(approved plug)
 run --yes --skip-tools "$@"
-for id in superpowers@claude-plugins-official taste-skill@taste-skill gsap-skills@gsap-skills harness@harness-marketplace; do
-  grep -q "^claude: updated plugin $id: 1.0.0 -> 2.0.0" "$out" || fail "claude: $id not updated"
+grep -q '^0 change(s) made' "$out" || fail "a plain run moved past the approved versions"
+[ "$(vendor_head fake__one)" = "$old_one" ] && [ "$(approved one)" = "$old_one" ] || fail "one moved without approval"
+pass "a plain run never moves past the approved versions"
+
+echo "== --check"
+inst --check
+grep -q '^one:' "$out" && fail "--check ignored the 24-hour cache"
+inst --check --force
+grep -q "^one: ${old_one:0:12} -> ${new_one:0:12} https://github.com/fake/one/compare/${old_one:0:12}...${new_one:0:12}" "$out" || fail "--check --force does not report one"
+grep -q '^two: ' "$out" && grep -q '^plug: ' "$out" || fail "--check --force does not report two and plug"
+grep -q '^anatomy:' "$out" && fail "--check reports an item without a newer version"
+inst --check --json
+jq -e '[.updates[].name] | index("one") and index("two") and index("plug")' "$out" >/dev/null || fail "--check --json"
+newer_one=$(commit_to one)
+inst --check
+grep -q "^one: .* -> ${new_one:0:12} " "$out" || fail "--check within 24 hours did not use the cache"
+jq '.checked -= 90000' "$A/state/updates.json" >"$A/state/u.tmp" && mv "$A/state/u.tmp" "$A/state/updates.json"
+inst --check
+grep -q "^one: .* -> ${newer_one:0:12} " "$out" || fail "--check after 24 hours did not check upstream again"
+new_one=$newer_one
+w="$HOME/work-self"; gitc clone -q "$HOME/self.git" "$w" && date >"$w/x" && gitc -C "$w" add x && gitc -C "$w" commit -q -m x && gitc -C "$w" push -q origin HEAD:master
+inst --check --force
+grep -q '^agent-setup: 1 new commit(s) on origin' "$out" || fail "--check does not report the new commit on origin"
+pass "--check: old -> new with compare links, 24-hour cache, --force, --json, new commits on origin"
+
+echo "== session-start notices with pending updates"
+notices
+for a in claude codex; do
+  jq -e '.hookSpecificOutput.hookEventName == "SessionStart" and (.hookSpecificOutput.additionalContext | test("one: .* -> .*compare") and test("--update <names> --yes") and test("--snooze") and test("--skip") and test("1 new commit"))' "$HOME/.notice-$a" >/dev/null ||
+    fail "$a session notice: $(cat "$HOME/.notice-$a")"
 done
-grep -q '^codex: plugins updated' "$out" || fail "codex: plugins not upgraded"
-grep -q '^antigravity: updated plugin superpowers: 1.0.0 -> 2.0.0' "$out" || fail "antigravity: superpowers not reinstalled"
-run --yes --skip-tools "$@"
-grep -q '^0 change(s) made' "$out" || fail "run after the update made changes"
-pass "every run updates the native plugins; a run without upstream changes reports 0"
+jq -e '(.additional_context | test("one: ")) and (has("hookSpecificOutput") | not)' "$HOME/.notice-cursor" >/dev/null || fail "cursor session notice: $(cat "$HOME/.notice-cursor")"
+jq -e '.injectSteps[0].ephemeralMessage | test("one: ")' "$HOME/.notice-antigravity" >/dev/null || fail "antigravity session notice: $(cat "$HOME/.notice-antigravity")"
+pass "session-start notice: Claude and Codex additionalContext, Cursor additional_context, Antigravity injectSteps"
 
-echo "== openai-curated syncs superpowers"
-export STUB_CODEX_CURATED=1
+# Fail open without network: an expired cache, the upstreams and origin unreachable.
+jq '.checked -= 90000' "$A/state/updates.json" >"$A/state/u.tmp" && mv "$A/state/u.tmp" "$A/state/updates.json"
+mv "$up" "$up.off" && mv "$HOME/self.git" "$HOME/self.off"
+start=$(date +%s)
+HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 expect_rc 0 "$notice_cmd" "$claude_start"
+jq -e '.hookSpecificOutput.additionalContext | test("one: ")' "$HOME/.hook-out" >/dev/null || fail "offline notice lost the cached updates: $(cat "$HOME/.hook-out")"
+[ $(($(date +%s) - start)) -lt 30 ] || fail "the offline notice took $(($(date +%s) - start)) s"
+HTTPS_PROXY=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 inst --check --force
+grep -qi 'error\|fatal' "$out" && fail "--check printed errors offline"
+mv "$up.off" "$up" && mv "$HOME/self.off" "$HOME/self.git"
+pass "offline: hooks exit 0 quickly with the cached notice, --check prints no errors"
+
+echo "== --snooze and --skip"
+inst --snooze one,agent-setup
+jq -e '.snoozed.one > now' "$A/state/updates.json" >/dev/null || fail "--snooze did not store the time"
+skip_two=$(jq -r '.latest.two.version[0:12]' "$A/state/updates.json")
+inst --skip "two@$skip_two"
+jq -e --arg v "$skip_two" '.skipped.two == $v' "$A/state/updates.json" >/dev/null || fail "--skip did not store the version"
+expect_rc 0 "$notice_cmd" "$claude_start"
+jq -e '.hookSpecificOutput.additionalContext | (test("- one: ") or test("- two: ") or test("new commit")) | not' "$HOME/.hook-out" >/dev/null || fail "snoozed or skipped items still in the notice: $(cat "$HOME/.hook-out")"
+jq -e '.hookSpecificOutput.additionalContext | test("- plug: ")' "$HOME/.hook-out" >/dev/null || fail "plug missing from the notice"
+inst --check
+grep -q '^two: .* (skipped)$' "$out" && grep -q '^one: .* (snoozed)$' "$out" || fail "--check does not mark skipped and snoozed items"
+commit_to two >/dev/null
+inst --check --force
+grep -q '^two: .* (skipped)$' "$out" && fail "a newer version of a skipped item is still skipped"
+pass "--snooze hides an item for 24 hours, --skip until a newer version appears"
+
+echo "== --update"
+before=$(snapshot)
+inst --update one --yes --dry-run --skip-tools --agents "$agents"
+[ "$before" = "$(snapshot)" ] || fail "--update --dry-run changed files"
+[ "$(approved one)" = "$old_one" ] || fail "--update --dry-run approved"
+head_before=$(git -C "$A" rev-parse HEAD)
+run --update one --yes --skip-tools "$@"
+[ "$(approved one)" = "$new_one" ] && [ "$(vendor_head fake__one)" = "$new_one" ] || fail "--update one did not move one"
+[ "$(jq -r '.one.previous' "$A/state/approved.json")" = "$old_one" ] || fail "the previous version of one was not kept"
+[ "$(approved two)" = "$old_two" ] && [ "$(vendor_head fake__two)" = "$old_two" ] && [ "$(approved plug)" = "$old_plug" ] || fail "--update one moved other items"
+[ "$(git -C "$A" rev-parse HEAD)" = "$head_before" ] && [ -z "$(git -C "$A" status --porcelain)" ] || fail "--update changed the repo (commit or tracked files)"
+grep -qi 'commit\|push' "$out" && fail "--update mentions a commit or push"
+ls "$HOME"/.agent-setup-backups/*/.agent-setup/state/approved.json >/dev/null 2>&1 || fail "state/approved.json was not backed up"
+run --update plug --yes --skip-tools "$@"
+[ "$(approved plug)" = "$new_plug" ] || fail "--update plug did not approve the new commit"
+[ "$(jq -r '.plugins["fakeplug@fakeplug"][0].gitCommitSha' "$inst_json")" = "$new_plug" ] || fail "claude: fakeplug not reinstalled at the new commit"
+[ "$(jq -r '.plugins["fakeplug@fakeplug"]' "$cstate")" = "$new_plug" ] || fail "codex: fakeplug not reinstalled at the new commit"
+grep -q 'plugin uninstall --keep-data fakeplug@fakeplug' "$stublog" || fail "claude: fakeplug was not reinstalled keeping its data"
 run --yes --skip-tools "$@"
-jq -e '.plugins | has("superpowers@openai-curated")' "$cstate" >/dev/null || fail "codex: superpowers not installed once openai-curated has it"
-[ ! -e "$HOME/.agents/skills/brainstorming" ] && [ ! -L "$HOME/.agents/skills/brainstorming" ] || fail "codex: vendored superpowers left in ~/.agents/skills"
-[ -f "$HOME/.kiro/skills/brainstorming/SKILL.md" ] || fail "kiro lost the vendored superpowers"
-run --yes --skip-tools "$@"
-grep -q '^0 change(s) made' "$out" || fail "run after the openai-curated install made changes"
-pass "codex: superpowers native once available; its vendored copies leave the shared dir"
+grep -q '^0 change(s) made' "$out" || fail "run after the updates made changes"
+"$A/install.sh" --update nosuchitem --yes >/dev/null 2>&1 && fail "--update accepted an unknown item"
+pass "--update NAME --yes moves only that item (state only, backed up, no commit); plugins reinstalled at the new commit"
 
 echo "== a fetch fails"
-vend="$HOME/.agent-setup/vendor/wheresryan22__anatomy"
+vend="$A/vendor/fake__two"
 url=$(git -C "$vend" remote get-url origin)
 git -C "$vend" remote set-url origin "$HOME/no-such-repo"
-run --yes --skip-tools "$@"
-grep -q 'WARN: could not fetch wheresryan22/anatomy; kept the last good copy' "$out" || fail "no warning for a failed fetch"
-[ -f "$HOME/.agents/skills/anatomy/SKILL.md" ] || fail "anatomy link dangles after a failed fetch"
+run --update two --yes --skip-tools "$@"
+grep -q 'WARN: failed: update vendor/fake__two' "$out" || fail "no warning for a failed fetch"
+[ -f "$HOME/.agents/skills/fake-two/SKILL.md" ] || fail "fake-two link dangles after a failed fetch"
 git -C "$vend" remote set-url origin "$url"
-pass "a failed fetch keeps the last good copy"
+run --yes --skip-tools "$@"
+[ "$(vendor_head fake__two)" = "$(approved two)" ] || fail "the approved commit was not fetched on the next run"
+pass "a failed fetch keeps the last good copy; the next run gets the approved commit"
 
 echo "== duplicates"
 # A second copy of a plugin from another marketplace: warn, no second install.
 jq '.["superpowers-dev"] = {source: {source: "github", repo: "obra/superpowers"}, installLocation: "/nonexistent"}' "$known" >"$known.tmp" && mv "$known.tmp" "$known"
 jq '.plugins["superpowers@superpowers-dev"] = [{scope: "user", installPath: "/nonexistent", version: "7.0.2", gitCommitSha: "22f0b463e7a5e579904dd6211a520321035526f7"}]
-  | del(.plugins["superpowers@claude-plugins-official"])' "$inst" >"$inst.tmp" && mv "$inst.tmp" "$inst"
+  | del(.plugins["superpowers@claude-plugins-official"])' "$inst_json" >"$inst_json.tmp" && mv "$inst_json.tmp" "$inst_json"
 jq '.plugins["gsap-skills@mine"] = "1.0.0" | del(.plugins["gsap-skills@gsap-skills"])' "$cstate" >"$cstate.tmp" && mv "$cstate.tmp" "$cstate"
 : >"$stublog"
 run --yes --skip-tools "$@"
@@ -340,7 +490,7 @@ pass "plugin installed from another marketplace: warned with the switch commands
 run --yes --skip-tools --fix-duplicates "$@"
 grep -q '^plugin uninstall superpowers@superpowers-dev' "$stublog" || fail "--fix-duplicates did not uninstall the other copy"
 grep -q '^plugin marketplace remove superpowers-dev' "$stublog" || fail "--fix-duplicates did not remove the emptied marketplace"
-jq -e '.plugins | has("superpowers@claude-plugins-official") and (has("superpowers@superpowers-dev") | not)' "$inst" >/dev/null || fail "superpowers was not switched"
+jq -e '.plugins | has("superpowers@claude-plugins-official") and (has("superpowers@superpowers-dev") | not)' "$inst_json" >/dev/null || fail "superpowers was not switched"
 jq -e '.plugins | has("gsap-skills@gsap-skills") and (has("gsap-skills@mine") | not)' "$cstate" >/dev/null || fail "codex: gsap-skills was not switched"
 ls "$HOME"/.agent-setup-backups/*/.claude/plugins/installed_plugins.json >/dev/null 2>&1 || fail "plugin records were not backed up"
 pass "--fix-duplicates switches the plugins to the core/plugins.lock source (records backed up)"
@@ -364,15 +514,7 @@ pass "--fix-duplicates moves unmanaged duplicates to the backups"
 
 run --yes --skip-tools "$@"
 grep -q '^0 change(s) made' "$out" || fail "run after the plugin and skill fixes made changes"
-grep -q 'WARN: .*\(skill\|plugin\|fetch\)' "$out" && fail "warnings left after the fixes"
+grep -q 'WARN: .*\(skill\|plugin\|fetch\|failed\)' "$out" && fail "warnings left after the fixes"
 pass "after the fixes: 0 changes, no plugin, skill or fetch warnings"
-
-echo "== --update (kept as an alias) --dry-run"
-before=$(snapshot)
-run --update --dry-run --skip-tools "$@"
-grep -q '^Dry run: 0 change(s) would be made' "$out" || fail "--update --dry-run would make changes"
-grep -q 'would fetch the latest cloudai-x/threejs-skills' "$out" || fail "--update --dry-run does not say it fetches the latest"
-[ "$before" = "$(snapshot)" ] || fail "--update --dry-run changed files"
-pass "--update is a plain run; with --dry-run it writes nothing"
 
 echo "ALL CHECKS PASSED ($os)"

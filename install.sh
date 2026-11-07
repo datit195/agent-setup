@@ -15,9 +15,15 @@ Usage: install.sh [options]
   --agents a,b       only these agents (default: every detected agent)
                      known: $ALL_AGENTS
   --skip-tools       skip package manager and tools.lock installs
-  --yes              install missing tools without asking
-  --update           same as a plain run, kept for compatibility: every run fetches the
-                     latest skills and updates the agents' plugins
+  --yes              install missing tools without asking; with --update NAMES: approve them
+                     without asking
+  --check            list newer upstream versions of the installed items (cached for 24 h)
+    --json           ... as JSON
+    --force          ... checking upstream now
+  --update [NAMES]   approve newer versions (asks per item; NAMES: comma-separated or all),
+                     then install them. Approvals are kept per machine in state/approved.json
+  --snooze NAMES     ask about these updates again in 24 h (all: every pending one)
+  --skip NAME@VER    do not ask about this version again
   --fix-duplicates   uninstall plugins installed from another marketplace or source than
                      core/plugins.lock's, and move unmanaged duplicate skill dirs to the backups
   --allow-any-root   allow running from a checkout other than ~/.agent-setup (tests)
@@ -25,7 +31,9 @@ Usage: install.sh [options]
 EOF
 }
 
-DRY_RUN=0 YES=0 SKIP_TOOLS=0 ANY_ROOT=0 FIX_DUPLICATES=0 SELECTED=""
+DRY_RUN=0 YES=0 SKIP_TOOLS=0 ANY_ROOT=0 FIX_DUPLICATES=0 SELECTED="" MODE=install JSON=0 FORCE=0 MODE_ARGS=()
+# set_mode MODE: --check, --notice, --update, --snooze and --skip exclude each other.
+set_mode() { [ "$MODE" = install ] || [ "$MODE" = "$1" ] || { printf 'Options --%s and --%s exclude each other\n' "$MODE" "$1" >&2; exit 2; }; MODE=$1; }
 while [ $# -gt 0 ]; do
   case $1 in
     --dry-run) DRY_RUN=1 ;;
@@ -33,7 +41,12 @@ while [ $# -gt 0 ]; do
     --agents=*) SELECTED=$(printf '%s' "${1#*=}" | tr ',' ' ') ;;
     --skip-tools) SKIP_TOOLS=1 ;;
     --yes | -y) YES=1 ;;
-    --update) ;; # every run updates; accepted for compatibility
+    --check | --notice) set_mode "${1#--}" ;;
+    --json) JSON=1 ;;
+    --force) FORCE=1 ;;
+    --update | --snooze | --skip)
+      set_mode "${1#--}"
+      while [ $# -ge 2 ] && case $2 in -*) false ;; *) true ;; esac; do MODE_ARGS+=("$2"); shift; done ;;
     --fix-duplicates) FIX_DUPLICATES=1 ;;
     --allow-any-root) ANY_ROOT=1 ;;
     -h | --help) usage; exit 0 ;;
@@ -42,7 +55,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-for lib in common fs json build tools hooks plugins; do
+for lib in common fs json build tools hooks plugins updates; do
   # shellcheck source=/dev/null
   . "$ROOT/lib/$lib.sh"
 done
@@ -69,6 +82,25 @@ has_cmd git || die "git is required ($git_hint)"
 cd "$ROOT"
 TMP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/agent-setup.XXXXXX")
 trap 'rm -rf "$TMP_DIR"' EXIT
+load_state
+
+# Update commands: they read and write only state/ (and, for --update, then
+# run the install below).
+case $MODE in
+  check | notice | snooze | skip)
+    has_cmd jq || { [ "$MODE" = notice ] && exit 0; die "jq is required for --$MODE"; }
+    case $MODE in
+      check) run_check ;;
+      notice) run_notice 2>/dev/null || true ;;
+      snooze) run_snooze ${MODE_ARGS[@]+"${MODE_ARGS[@]}"} ;;
+      skip) run_skip ${MODE_ARGS[@]+"${MODE_ARGS[@]}"} ;;
+    esac
+    exit 0 ;;
+  update)
+    has_cmd jq || die "jq is required for --update"
+    run_update ${MODE_ARGS[@]+"${MODE_ARGS[@]}"} || exit 0 ;;
+esac
+
 setup_link_mode
 
 [ "$DRY_RUN" = 1 ] && log "Dry run: nothing will be changed."
@@ -79,7 +111,7 @@ section "Tools"
 if [ "$SKIP_TOOLS" = 1 ]; then
   log "skipped (--skip-tools)"
 else
-  install_tools
+  base_tools
 fi
 if ! has_cmd jq; then
   if [ "$SKIP_TOOLS" != 1 ] && has_cmd brew; then
@@ -94,6 +126,11 @@ if ! has_cmd jq; then
     die "jq is required: run install.sh without --skip-tools, or install jq with your package manager"
   fi
 fi
+# jq may be new; --update keeps the approvals it just made in memory.
+[ "$MODE" = update ] || load_state
+# Approve what has no approved version yet, then the tools.lock tools at it.
+approve_missing
+if [ "$SKIP_TOOLS" = 1 ]; then install_updated_tools; else install_tools; fi
 
 # 2. Git identity
 section "Git identity"
@@ -103,11 +140,12 @@ git_identity
 section "Shell env"
 shell_env
 
-# 4. Build (fetches the latest third-party skills)
+# 4. Build (approved versions, third-party skills at them, resolved MCP servers)
 section "Build"
 build_agents_md
 vendor_skills
 override_skills
+resolve_mcp
 
 # 5. Agents
 section "Agents"
@@ -141,5 +179,7 @@ done
 # 6. Vendor dirs no skill uses any more
 section "Cleanup"
 cleanup_vendor
+save_approved
 
 summary
+pending_summary

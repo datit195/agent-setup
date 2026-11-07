@@ -47,15 +47,18 @@ _agy_plugins() {
     jq -c '[.. | objects | select((.name | type) == "string" and has("source"))]' 2>/dev/null | tr -d '\r' || true
 }
 
-# Install every core/plugins.lock plugin with antigravity=github natively with
-# `agy plugin install https://github.com/<repo>`. agy has no update command and
-# does not auto-update plugins installed from GitHub, so each run reinstalls
-# them (the author's documented update); a change counts only when the
-# version moved. A plugin installed from another source is not replaced
-# (warning; --fix-duplicates uninstalls it first). A plugin agy cannot install
-# keeps its vendored copy.
+_agy_reinstall() { agy plugin uninstall "$1" </dev/null >/dev/null; agy plugin install "$2" </dev/null; }
+
+# Install every core/plugins.lock plugin with antigravity=github natively
+# from its vendor checkout, which is at the approved commit:
+# `agy plugin install <dir>` (agy installs from GitHub only at the default
+# branch head, and does not auto-update plugins installed by the CLI). The
+# plugin is reinstalled only when the approved commit has another version
+# than the installed one. A plugin installed from another source (such as the
+# app) is not replaced (warning; --fix-duplicates uninstalls it first). A
+# plugin agy cannot install keeps its vendored copy.
 antigravity_plugins() {
-  local list name repo how url src before after
+  local list name repo how dir path src have want
   if ! has_cmd agy; then
     log "NOTE: agy CLI not found; plugins come as vendored skills in ~/.gemini/config/skills"
     return 0
@@ -68,33 +71,35 @@ antigravity_plugins() {
   while IFS=$'\t' read -r name repo how <&3; do
     [ -n "$name" ] || continue
     [ "$how" = github ] || { warn "plugins.lock: unknown antigravity=$how for $name; skipped"; continue; }
-    url="https://github.com/$repo"
+    dir="$ROOT/vendor/${repo%%/*}__${repo#*/}"
+    path=$(native_path "$dir")
+    if [ "$DRY_RUN" != 1 ] && [ ! -d "$dir/.git" ]; then
+      warn "antigravity: no checkout of $repo at an approved commit; Antigravity gets the vendored copy of $name"
+      continue
+    fi
+    want=$(jq -r '.version // empty' "$dir/.antigravity-plugin/plugin.json" "$dir/plugin.json" 2>/dev/null | head -n 1 | tr -d '\r' || true)
     src=$(printf '%s' "$list" | jq -r --arg n "$name" '[.[] | select(.name == $n) | .source | tostring][0] // empty')
+    have=$(printf '%s' "$list" | jq -r --arg n "$name" '[.[] | select(.name == $n) | .version // ""][0] // empty')
     if [ -n "$src" ]; then
-      native_add antigravity "$name"
-      case $(printf '%s' "$src" | tr 'A-Z' 'a-z') in
-        *"$(printf '%s' "$repo" | tr 'A-Z' 'a-z')"*)
-          if [ "$DRY_RUN" = 1 ]; then
-            log "[dry-run] antigravity: would reinstall plugin $name from $url to update it"
-            continue
-          fi
-          before=$(printf '%s' "$list" | jq -r --arg n "$name" '[.[] | select(.name == $n) | .version // ""][0]')
-          agy plugin install "$url" </dev/null >/dev/null 2>&1 || { warn "antigravity: reinstalling $name from $url failed; kept ${before:-the installed copy}"; continue; }
-          after=$(_agy_plugins | jq -r --arg n "$name" '[.[] | select(.name == $n) | .version // ""][0]')
-          [ "$before" = "$after" ] || changed "antigravity: updated plugin $name: $before -> $after"
+      case $(printf '%s' "$src" | tr 'A-Z\\' 'a-z/') in
+        "$(printf '%s' "$path" | tr 'A-Z\\' 'a-z/')"* | *"$(printf '%s' "$repo" | tr 'A-Z' 'a-z')"*)
+          native_add antigravity "$name"
+          [ -n "$want" ] && [ "$have" != "$want" ] || continue
+          act "antigravity: reinstall plugin $name at the approved commit ($have -> $want)" _agy_reinstall "$name" "$path"
           continue ;;
       esac
       if [ "$FIX_DUPLICATES" != 1 ]; then
-        warn "antigravity: $name is already installed from $src, so it was not installed from $url as well. Switch with: agy plugin uninstall $name && agy plugin install $url (or re-run install.sh --fix-duplicates)"
+        native_add antigravity "$name"
+        warn "antigravity: $name is already installed from $src, so it was not installed from $(pretty "$dir") as well. Switch with: agy plugin uninstall $name && agy plugin install $path (or re-run install.sh --fix-duplicates)"
         continue
       fi
-      act "antigravity: uninstall plugin $name (installed from $src; plugins.lock uses $url)" agy plugin uninstall "$name"
+      act "antigravity: uninstall plugin $name (installed from $src)" agy plugin uninstall "$name"
     fi
-    act "antigravity: install plugin $name from $url" agy plugin install "$url"
+    act "antigravity: install plugin $name from $(pretty "$dir")${want:+ ($want)}" agy plugin install "$path"
     if [ "$DRY_RUN" = 1 ] || _agy_plugins | jq -e --arg n "$name" 'any(.[]; .name == $n)' >/dev/null 2>&1; then
       native_add antigravity "$name"
     else
-      warn "antigravity: could not install $name from $url; Antigravity gets the vendored copy instead"
+      warn "antigravity: could not install $name; Antigravity gets the vendored copy instead"
     fi
   done 3< <(plugin_ids antigravity)
 }
