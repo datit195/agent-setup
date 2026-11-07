@@ -216,6 +216,7 @@ claude_plugins() {
       warn "claude: $id is installed at ${cur:0:12}, but ${want:0:12} is approved on this machine; it was left as it is (install.sh --update $item installs the newest after asking)"
     fi
   done 3< <(plugin_ids claude)
+  [ "$FIX_DUPLICATES" != 1 ] || claude_drop_orphan_caches
 
   # The local pinned catalogs of earlier versions, once no marketplace uses them.
   local old="$ROOT/build/claude-marketplaces"
@@ -224,6 +225,32 @@ claude_plugins() {
     act "remove build/claude-marketplaces (old pinned catalogs)" rm -rf "$old"
   fi
 }
+
+# --fix-duplicates: remove cache/<marketplace>/<plugin>/ dirs that Claude Code
+# keeps after an uninstall, when no installed plugin has that
+# <plugin>@<marketplace> id. Only plugins named in core/plugins.lock; symlinks
+# and anything that resolves outside the cache dir are left alone. Caches are
+# re-downloadable, so there is no backup.
+claude_drop_orphan_caches() {
+  local cache root names ids d m n real
+  cache="$(claude_plugins_dir)/cache"
+  [ -d "$cache" ] && [ ! -L "$cache" ] && root=$(cd -P "$cache" && pwd -P) || return 0
+  ids=$(jq -r '.plugins | keys[]' "$(claude_plugins_dir)/installed_plugins.json" 2>/dev/null) || return 0
+  ids=$'\n'$(printf '%s' "$ids" | tr -d '\r')$'\n'
+  names=$'\n'$(plugin_ids claude | cut -f1)$'\n'
+  for d in "$cache"/*/*/; do
+    d=${d%/} n=${d##*/} m=${d%/*}
+    m=${m##*/}
+    in_list "$names" "$n" && ! in_list "$ids" "$n@$m" || continue
+    [ ! -L "$cache/$m" ] && [ ! -L "$d" ] || continue
+    real=$(cd -P "$d" && pwd -P) || continue
+    [ "$real" = "$root/$m/$n" ] || continue
+    act "claude: remove orphaned plugin cache $(pretty "$d") ($n@$m is not installed)" _rm_cache_dir "$real"
+  done
+}
+
+# _rm_cache_dir DIR: remove DIR, then its parent when that is left empty.
+_rm_cache_dir() { rm -rf "$1" && { rmdir "${1%/*}" 2>/dev/null || true; }; }
 
 # Claude plugin skills as check_skill_dups extra lines: "name<TAB>dir<TAB>1p"
 # for plugins in core/plugins.lock, "0p" for other user-scope plugins.

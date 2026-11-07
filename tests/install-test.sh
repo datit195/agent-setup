@@ -545,14 +545,24 @@ jq -e '.marketplaces["superpowers-dev"] | test("^https:")' "$cstate" >/dev/null 
 [ -f "$HOME/.agents/skills/gsap-core/SKILL.md" ] || fail "gsap-core left ~/.agents/skills"
 check_codex_skills ""
 pass "plugin installed from another marketplace: warned with the switch commands, no second copy (claude, codex)"
+# Cache dirs Claude Code keeps after an uninstall: the duplicate's (removed
+# in the same run), an older orphan of a managed plugin, and a user plugin's.
+pcache="$HOME/.claude/plugins/cache"
+mkdir -p "$pcache/superpowers-dev/superpowers/7.0.2" "$pcache/old-mkt/harness/1.0.0" "$pcache/mine-mkt/my-plugin/1.0.0"
+run --dry-run --yes --skip-tools --fix-duplicates "$@"
+grep -q '^\[dry-run\] claude: remove orphaned plugin cache ~/.claude/plugins/cache/old-mkt/harness' "$out" || fail "dry run did not list the orphaned cache"
+[ -d "$pcache/old-mkt/harness/1.0.0" ] && [ -d "$pcache/superpowers-dev/superpowers/7.0.2" ] || fail "dry run removed a plugin cache"
 run --yes --skip-tools --fix-duplicates "$@"
+[ ! -e "$pcache/old-mkt" ] && [ ! -e "$pcache/superpowers-dev" ] || fail "--fix-duplicates did not remove the orphaned plugin caches: $(ls "$pcache")"
+[ -d "$pcache/mine-mkt/my-plugin/1.0.0" ] || fail "--fix-duplicates removed the cache of a plugin not in core/plugins.lock"
+[ -d "$pcache/claude-plugins-official/superpowers" ] && [ -d "$pcache/harness-marketplace/harness" ] || fail "--fix-duplicates removed the cache of an installed plugin"
 grep -q '^plugin uninstall superpowers@superpowers-dev' "$stublog" || fail "--fix-duplicates did not uninstall the other copy"
 grep -q '^plugin marketplace remove superpowers-dev' "$stublog" || fail "--fix-duplicates did not remove the emptied marketplace"
 jq -e '.plugins | has("superpowers@claude-plugins-official") and (has("superpowers@superpowers-dev") | not)' "$inst_json" >/dev/null || fail "superpowers was not switched"
 jq -e '.plugins | has("gsap-skills@gsap-skills") and (has("gsap-skills@mine") | not)' "$cstate" >/dev/null || fail "codex: gsap-skills was not switched"
 jq -e '.plugins | has("superpowers@superpowers") and (has("superpowers@superpowers-dev") or has("superpowers@openai-curated") | not)' "$cstate" >/dev/null || fail "codex: superpowers was not switched: $(cat "$cstate")"
 ls "$HOME"/.agent-setup-backups/*/.claude/plugins/installed_plugins.json >/dev/null 2>&1 || fail "plugin records were not backed up"
-pass "--fix-duplicates switches the plugins to the core/plugins.lock source (records backed up)"
+pass "--fix-duplicates switches the plugins to the core/plugins.lock source (records backed up) and removes orphaned managed plugin caches"
 
 # Duplicate skills: an unmanaged copy next to a managed one, for Codex (and
 # Cursor, which reads ~/.codex/skills) and Claude (next to a plugin skill).
@@ -575,5 +585,7 @@ run --yes --skip-tools "$@"
 grep -q '^0 change(s) made' "$out" || fail "run after the plugin and skill fixes made changes"
 grep -q 'WARN: .*\(skill\|plugin\|fetch\|failed\)' "$out" && fail "warnings left after the fixes"
 pass "after the fixes: 0 changes, no plugin, skill or fetch warnings"
+run --yes --skip-tools --fix-duplicates "$@"
+grep -q '^0 change(s) made' "$out" || fail "--fix-duplicates made changes on a re-run"
 
 echo "ALL CHECKS PASSED ($os)"

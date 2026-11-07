@@ -25,7 +25,8 @@ Usage: install.sh [options]
   --snooze NAMES     ask about these updates again in 24 h (all: every pending one)
   --skip NAME@VER    do not ask about this version again
   --fix-duplicates   uninstall plugins installed from another marketplace or source than
-                     core/plugins.lock's, and move unmanaged duplicate skill dirs to the backups
+                     core/plugins.lock's, move unmanaged duplicate skill dirs to the backups,
+                     and delete Claude Code plugin cache dirs no installed plugin uses
   --allow-any-root   allow running from a checkout other than ~/.agent-setup (tests)
   -h, --help         show this help
 EOF
